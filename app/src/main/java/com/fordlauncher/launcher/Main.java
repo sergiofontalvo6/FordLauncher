@@ -99,11 +99,6 @@ public class Main extends Activity {
     private FrameLayout root;
     private FrameLayout board;
     private FrameLayout drawer;
-    private FrameLayout dashboardViewContainer;
-    private FrameLayout embeddedAppContainer;
-    private final java.util.List<View> dockViews = new java.util.ArrayList<View>();
-    private int activeDock = -1;
-    private android.webkit.WebView embeddedWeb;
     private float s = 1f;
     private int builtW, builtH;
 
@@ -500,7 +495,6 @@ public class Main extends Activity {
         super.onResume();
         checkBrightnessAndSwitch();
         immersive();
-        if (embeddedWeb != null) embeddedWeb.onResume();
         if (SDK >= 23 && !askedPerms) {
             askedPerms = true;
             try { Modern.ensurePermissions(this, 77); } catch (Throwable ignored) { }
@@ -530,7 +524,6 @@ public class Main extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        if (embeddedWeb != null) embeddedWeb.onPause();
         stopGps();
         h.removeCallbacks(ticker);
         h.removeCallbacks(progressTick);
@@ -551,7 +544,6 @@ public class Main extends Activity {
     @Override
     public void onBackPressed() {
         if (settingsView != null) { closeSettings(); return; }
-        if (activeDock >= 0) { showDashboard(); return; }
         closeDrawer(); // es la pantalla de inicio: atrás no la cierra
     }
 
@@ -658,7 +650,7 @@ public class Main extends Activity {
         blp.gravity = Gravity.CENTER;
         root.addView(board, blp);
 
-        // franja del dock ultra baja (48dp): a todo ancho, pegada abajo
+        // franja del dock ultra baja (48dp)
         View dockBg = new View(this);
         dockBg.setBackgroundColor(DOCK);
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -666,22 +658,11 @@ public class Main extends Activity {
         dlp.gravity = Gravity.BOTTOM;
         root.addView(dockBg, 0, dlp);
 
-        // Contenedores a todo ancho (sin márgenes laterales): dashboard y embebidas.
-        dashboardViewContainer = new FrameLayout(this);
-        dashboardViewContainer.setId(0x102001);
-        board.addView(dashboardViewContainer, new FrameLayout.LayoutParams(-1, -1));
-        embeddedAppContainer = new FrameLayout(this);
-        embeddedAppContainer.setId(0x102002);
-        embeddedAppContainer.setBackgroundColor(CARD);
-        embeddedAppContainer.setVisibility(View.GONE);
-        place(board, embeddedAppContainer, 0, 56, 1024, 492);
-
         buildTop();
         buildCarCard();
         buildAaCard();
         buildAudioCard();
         buildDock();
-        if (activeDock >= 0) showDashboard(); else showDashboard();
 
         drawer = null;
         settingsView = null;
@@ -812,8 +793,7 @@ public class Main extends Activity {
 
     private void buildAaCard() {
         FrameLayout card = new FrameLayout(this);
-        FrameLayout parent = dashboardViewContainer != null ? dashboardViewContainer : board;
-        place(parent, card, 328, 64, 420, 380);
+        place(board, card, 328, 64, 420, 380);
         // fondo decorativo mientras no hay GPS; encima, el mapa en vivo
         card.addView(new MapView(this, s, 20 * s), new FrameLayout.LayoutParams(-1, -1));
         liveMap = new LiveMapView(this, s, 20 * s);
@@ -977,7 +957,6 @@ public class Main extends Activity {
     private void buildDock() {
         final String[] icons = {"radio", "bluetooth", "music_note", "photo_camera", "public", "folder", "bug_report", "settings", "apps"};
         final String[] names = {"Radio", "Bluetooth", "Música", "Cámara", "Navegador", "Archivos", "Diagnóstico", "Ajustes", "Apps"};
-        dockViews.clear();
         for (int i = 0; i < 9; i++) {
             final int idx = i;
             LinearLayout b = new LinearLayout(this);
@@ -990,26 +969,17 @@ public class Main extends Activity {
             l.setPadding((int) (4 * s), 0, 0, 0);
             b.addView(l, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             place(board, b, 8 + 112 * i, 548, 104, 48);
-            dockViews.add(b);
             b.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
-                    if (idx == 8) { // Apps actúa como Home cuando hay embebida, o el cajón si está el tablero
-                        if (activeDock >= 0) showDashboard(); else openDrawer();
-                        return;
-                    }
-                    if (idx == 7) { // Ajustes: embedded con categorías
-                        if (activeDock == idx) showDashboard(); else showEmbedded(idx);
-                        return;
-                    }
                     switch (idx) {
-                        case 0: showExternal(0, 0); break;
-                        case 1: showExternal(1, 1); break;
-                        case 2: if (activeDock == 2) showDashboard(); else showEmbedded(2); break;
-                        case 3: showExternal(3, 3); break;
-                        case 4: if (activeDock == 4) showDashboard(); else showEmbedded(4); break;
-                        case 5: if (activeDock == 5) showDashboard(); else showEmbedded(5); break;
-                        case 6: if (activeDock == 6) showDashboard(); else showEmbedded(6); break;
-                        case 7: if (activeDock == 7) showDashboard(); else showEmbedded(7); break;
+                        case 0: openSlot(0); break;
+                        case 1: openSlot(1); break;
+                        case 2: openSlot(2); break;
+                        case 3: openSlot(3); break;
+                        case 4: openBrowser(); break;
+                        case 5: openSlot(4); break;
+                        case 6: openObdDiag(); break;
+                        case 7: openSlot(5); break;
                         default: openDrawer();
                     }
                 }
@@ -1025,312 +995,6 @@ public class Main extends Activity {
                 }
             });
         }
-        updateDockHighlight();
-    }
-
-    private void updateDockHighlight() {
-        for (int i = 0; i < dockViews.size(); i++) {
-            View b = dockViews.get(i);
-            boolean active = (i == activeDock);
-            b.setBackground(round(active ? RED_DARK : Color.TRANSPARENT, 12));
-            if (i == activeDock) {
-                b.setBackground(round(RED, 12));
-            }
-            if (b instanceof LinearLayout && ((LinearLayout) b).getChildCount() > 1) {
-                View label = ((LinearLayout) b).getChildAt(1);
-                if (label instanceof TextView) {
-                    ((TextView) label).setTextColor(active ? Color.WHITE : SOFT);
-                    ((TextView) label).setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-                }
-            }
-        }
-    }
-
-    private void showDashboard() {
-        activeDock = -1;
-        if (dashboardViewContainer != null) dashboardViewContainer.setVisibility(View.VISIBLE);
-        if (embeddedAppContainer != null) embeddedAppContainer.setVisibility(View.GONE);
-        if (embeddedWeb != null) embeddedWeb.onPause();
-        updateDockHighlight();
-        renderTrack();
-    }
-
-    private void showEmbedded(int idx) {
-        if (activeDock == idx) { showDashboard(); return; }
-        // Respetar apps configuradas: si hay app guardada con ActivityView/API 29+, incrusta esa actividad;
-        // si no, fallback interno (reproductor/browser) o intent clásico en showExternal.
-        if (idx == 2 && prefs.getString("music", null) != null) { showExternal(2, 2); return; }
-        if (idx == 4 && prefs.getString("web", null) != null) { showExternalWeb(); return; }
-        activeDock = idx;
-        if (dashboardViewContainer != null) dashboardViewContainer.setVisibility(View.GONE);
-        if (embeddedAppContainer != null) {
-            embeddedAppContainer.removeAllViews();
-            embeddedAppContainer.setVisibility(View.VISIBLE);
-            embeddedAppContainer.setClickable(true);
-        }
-        embeddedWeb = null;
-        if (idx == 2) embeddedMusic();
-        else if (idx == 4) embeddedBrowser();
-        else if (idx == 5) embeddedFiles();
-        else if (idx == 6) embeddedDiag();
-        else if (idx == 7) embeddedSettings();
-        else if (idx == 8) embeddedApps();
-        updateDockHighlight();
-    }
-
-    private void showExternalWeb() {
-        // Navegador configurado (web) con ActivityView en API 29+, si no openBrowser() clásico.
-        try {
-            String saved = prefs.getString("web", null);
-            if (saved != null) {
-                ComponentName cn = ComponentName.unflattenFromString(saved);
-                Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(cn).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                // Intentamos embebir vía ActivityView en API 29+ (misma ruta que showExternal)
-                if (SDK >= 29) {
-                    try {
-                        Class<?> av = Class.forName("android.app.ActivityView");
-                        View v = (View) av.getConstructor(Context.class).newInstance(this);
-                        activeDock = 4;
-                        dashboardViewContainer.setVisibility(View.GONE);
-                        embeddedAppContainer.removeAllViews();
-                        embeddedAppContainer.addView(v, new FrameLayout.LayoutParams(-1, -1));
-                        embeddedAppContainer.setVisibility(View.VISIBLE);
-                        av.getMethod("performClick").invoke(v);
-                        startActivity(i);
-                        updateDockHighlight();
-                        return;
-                    } catch (Throwable ignored) {}
-                }
-                // Fallback: intent clásico (dock sigue en Main al volver)
-                startActivity(i);
-                return;
-            }
-        } catch (Throwable ignored) {}
-        embeddedBrowser();
-    }
-
-    private void showExternal(int dockIdx, int slotIdx) {
-        if (activeDock == dockIdx) { showDashboard(); return; }
-        // Android 10+ (API 29+): intentar ActivityView; si falla, fallback a intent clásico.
-        if (SDK >= 29) {
-            try {
-                Class<?> av = Class.forName("android.app.ActivityView");
-                View v = (View) av.getConstructor(Context.class).newInstance(this);
-                if (embeddedAppContainer != null) {
-                    activeDock = dockIdx;
-                    dashboardViewContainer.setVisibility(View.GONE);
-                    embeddedAppContainer.removeAllViews();
-                    embeddedAppContainer.addView(v, new FrameLayout.LayoutParams(-1, -1));
-                    embeddedAppContainer.setVisibility(View.VISIBLE);
-                    // Abrir la app dentro del ActivityView
-                    ResolveInfo r = find(SLOTS[slotIdx][2], SLOTS[slotIdx][3]);
-                    Object opts = null;
-                    try {
-                        Class<?> ao = Class.forName("android.app.ActivityOptions");
-                        java.lang.reflect.Method mk = ao.getMethod("makeBasic");
-                        opts = mk.invoke(null);
-                        ao.getMethod("setLaunchBounds", android.graphics.Rect.class).invoke(opts, new android.graphics.Rect(0, 0, (int) (1024 * s), (int) (492 * s)));
-                    } catch (Throwable ignored) {}
-                    try {
-                        if (r != null) {
-                            Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(new ComponentName(r.activityInfo.packageName, r.activityInfo.name)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            av.getMethod("performClick").invoke(v);
-                            // ActivityView usa startActivityOnVirtualDevice si existe; si no, fallback
-                            try { av.getMethod("setActivityTask", int.class); } catch (Throwable ignored2) {}
-                            // launching mediante intent clásico si ActivityView no expone método simple
-                            openSlot(slotIdx);
-                            return;
-                        }
-                    } catch (Throwable ignored) {}
-                }
-            } catch (Throwable ignored) {}
-        }
-        // Fallback Android 8.1 AC8227: lanza la app; el dock vuelve al volver a Main (singleTask)
-        activeDock = -1; // no queda embebida, vuelve al tablero al regresar
-        dashboardViewContainer.setVisibility(View.VISIBLE);
-        embeddedAppContainer.setVisibility(View.GONE);
-        updateDockHighlight();
-        openSlot(slotIdx);
-    }
-
-    private void embedCloseButton() {
-        TextView c = tv("✕ Inicio", 14, Color.WHITE, true);
-        c.setGravity(Gravity.CENTER);
-        c.setBackground(round(RED, 14));
-        c.setPadding((int) (16 * s), (int) (8 * s), (int) (16 * s), (int) (8 * s));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2);
-        lp.gravity = Gravity.TOP | Gravity.RIGHT;
-        lp.rightMargin = (int) (12 * s);
-        lp.topMargin = (int) (12 * s);
-        c.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showDashboard(); } });
-        embeddedAppContainer.addView(c, lp);
-    }
-
-    private void embeddedMusic() {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding((int) (24 * s), (int) (24 * s), (int) (24 * s), (int) (24 * s));
-        TextView t = tv(curTitle != null ? curTitle : "Nada sonando", 24, TEXT, true);
-        t.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.addView(t, new LinearLayout.LayoutParams(-1, -2));
-        TextView a = tv(curArtist != null ? curArtist : "Toca para abrir tu música", 16, MUTED, false);
-        a.setGravity(Gravity.CENTER_HORIZONTAL);
-        a.setPadding(0, (int) (8 * s), 0, (int) (8 * s));
-        col.addView(a, new LinearLayout.LayoutParams(-1, -2));
-        TextView src = tv(curSource != null ? curSource.toUpperCase() : "", 13, RED, true);
-        src.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.addView(src, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout ctrls = new LinearLayout(this);
-        ctrls.setOrientation(LinearLayout.HORIZONTAL);
-        ctrls.setGravity(Gravity.CENTER_HORIZONTAL);
-        ctrls.setPadding(0, (int) (20 * s), 0, 0);
-        View prev = circleIcon("skip_previous", 64, 30, BTN);
-        View play = circleIcon("play_arrow", 76, 38, RED);
-        View next = circleIcon("skip_next", 64, 30, BTN);
-        prev.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PREVIOUS));
-        play.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
-        next.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_NEXT));
-        ctrls.addView(prev, new LinearLayout.LayoutParams((int) (64 * s), (int) (64 * s)));
-        LinearLayout spacer = new LinearLayout(this);
-        spacer.addView(play, new LinearLayout.LayoutParams((int) (76 * s), (int) (76 * s)));
-        spacer.setPadding((int) (16 * s), 0, (int) (16 * s), 0);
-        ctrls.addView(spacer);
-        ctrls.addView(next, new LinearLayout.LayoutParams((int) (64 * s), (int) (64 * s)));
-        col.addView(ctrls, new LinearLayout.LayoutParams(-1, -2));
-        TextView open = tv("Abrir mi app de música", 14, SOFT, false);
-        open.setGravity(Gravity.CENTER_HORIZONTAL);
-        open.setPadding(0, (int) (16 * s), 0, 0);
-        open.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { openSlot(2); } });
-        col.addView(open, new LinearLayout.LayoutParams(-1, -2));
-        embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
-    }
-
-    private void embeddedBrowser() {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        try {
-            embeddedWeb = new android.webkit.WebView(this);
-            embeddedWeb.getSettings().setJavaScriptEnabled(true);
-            embeddedWeb.getSettings().setSupportZoom(true);
-            embeddedWeb.loadUrl("https://www.google.com");
-        } catch (Throwable e) {
-            TextView t = tv("WebView no disponible en esta pantalla", 16, SOFT, false);
-            t.setGravity(Gravity.CENTER_HORIZONTAL);
-            col.addView(t, new LinearLayout.LayoutParams(-1, -2));
-            embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-            embedCloseButton();
-            return;
-        }
-        col.addView(embeddedWeb, new LinearLayout.LayoutParams(-1, 0, 1f));
-        TextView b = tv("Abrir en navegador externo", 13, SOFT, false);
-        b.setGravity(Gravity.CENTER_HORIZONTAL);
-        b.setPadding(0, (int) (8 * s), 0, (int) (8 * s));
-        b.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { openBrowser(); } });
-        col.addView(b, new LinearLayout.LayoutParams(-1, -2));
-        embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
-    }
-
-    private void embeddedFiles() {
-        android.widget.ScrollView sc = new android.widget.ScrollView(this);
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding((int) (16 * s), (int) (40 * s), (int) (16 * s), (int) (16 * s));
-        try {
-            File dir = android.os.Environment.getExternalStorageDirectory();
-            File[] fs = dir != null ? dir.listFiles() : null;
-            if (fs != null) {
-                java.util.Arrays.sort(fs, new Comparator<File>() { public int compare(File a, File b) { return a.getName().compareToIgnoreCase(b.getName()); } });
-                for (File f : fs) {
-                    TextView t = tv((f.isDirectory() ? "📁 " : "📄 ") + f.getName(), 14, SOFT, false);
-                    t.setSingleLine(false);
-                    t.setPadding(0, (int) (6 * s), 0, (int) (6 * s));
-                    col.addView(t, new LinearLayout.LayoutParams(-1, -2));
-                }
-            }
-        } catch (Throwable e) {}
-        sc.addView(col, new FrameLayout.LayoutParams(-1, -2));
-        embeddedAppContainer.addView(sc, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
-    }
-
-    private void embeddedDiag() {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding((int) (24 * s), (int) (40 * s), (int) (24 * s), (int) (24 * s));
-        String msg = "OBD2 próximamente\n\nVehículo: " + prefs.getString("car_name", "Mi vehículo")
-                + "\nAndroid " + android.os.Build.VERSION.RELEASE + " (API " + SDK + ")"
-                + "\nGPS: " + (lastFix > 0 ? "fijado" : "buscando")
-                + "\nMúsica: " + (curTitle != null ? curTitle : "Nada sonando")
-                + "\nBluetooth: " + BtBridge.logText();
-        TextView t = tv(msg, 14, SOFT, false);
-        t.setSingleLine(false);
-        col.addView(t, new LinearLayout.LayoutParams(-1, 0, 1f));
-        TextView b1 = tv("Exportar diagnóstico", 14, Color.WHITE, true);
-        b1.setGravity(Gravity.CENTER);
-        b1.setBackground(round(RED, 12));
-        b1.setPadding(0, (int) (10 * s), 0, (int) (10 * s));
-        b1.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { runDiag(); } });
-        col.addView(b1, new LinearLayout.LayoutParams(-1, -2));
-        embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
-    }
-
-    private void embeddedSettings() {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding((int) (24 * s), (int) (40 * s), (int) (24 * s), (int) (24 * s));
-        for (int i = 1; i < CAT_NAMES.length; i++) {
-            final int cat = i;
-            TextView t = tv(CAT_NAMES[i], 16, TEXT, false);
-            t.setPadding(0, (int) (10 * s), 0, (int) (10 * s));
-            t.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showSettings(cat); } });
-            col.addView(t, new LinearLayout.LayoutParams(-1, -2));
-        }
-        TextView note = tv("La pantalla de Ajustes completa abre sobre el panel (se mantiene dock + reloj).", 12, MUTED, false);
-        note.setSingleLine(false);
-        col.addView(note, new LinearLayout.LayoutParams(-1, -2));
-        embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
-    }
-
-    private void embeddedApps() {
-        loadApps();
-        final android.widget.ListView lv = new android.widget.ListView(this);
-        lv.setAdapter(new BaseAdapter() {
-            public int getCount() { return apps.size(); }
-            public Object getItem(int p) { return apps.get(p); }
-            public long getItemId(int p) { return p; }
-            public View getView(int p, View cv, ViewGroup parent) {
-                LinearLayout r = cv instanceof LinearLayout ? (LinearLayout) cv : new LinearLayout(Main.this);
-                r.setOrientation(LinearLayout.HORIZONTAL);
-                r.setGravity(Gravity.CENTER_VERTICAL);
-                r.setPadding((int) (16 * s), (int) (8 * s), (int) (16 * s), (int) (8 * s));
-                if (r.getChildCount() == 0) {
-                    ImageView im = new ImageView(Main.this);
-                    r.addView(im, new LinearLayout.LayoutParams((int) (40 * s), (int) (40 * s)));
-                    TextView lb = tv("", 15, SOFT, false);
-                    lb.setPadding((int) (12 * s), 0, 0, 0);
-                    r.addView(lb, new LinearLayout.LayoutParams(-1, -2));
-                }
-                ResolveInfo ri = apps.get(p);
-                ((ImageView) r.getChildAt(0)).setImageDrawable(ri.loadIcon(getPackageManager()));
-                ((TextView) r.getChildAt(1)).setText(ri.loadLabel(getPackageManager()));
-                r.setTag(p);
-                return r;
-            }
-        });
-        lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            public void onItemClick(AdapterView<?> par, View v, int pos, long id) { launch(apps.get(pos)); showDashboard(); }
-        });
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(0, (int) (40 * s), 0, 0);
-        col.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
-        embeddedAppContainer.addView(col, new FrameLayout.LayoutParams(-1, -1));
-        embedCloseButton();
     }
 
     /** Diagnóstico / OBD2 (placeholder por ahora, para enlazar con OBD2 más adelante). */
@@ -1394,8 +1058,7 @@ public class Main extends Activity {
     private FrameLayout card(float x, float y, float w, float hh, int color) {
         FrameLayout c = new FrameLayout(this);
         c.setBackground(round(color, 20));
-        FrameLayout parent = dashboardViewContainer != null ? dashboardViewContainer : board;
-        place(parent, c, x, y, w, hh);
+        place(board, c, x, y, w, hh);
         return c;
     }
 
