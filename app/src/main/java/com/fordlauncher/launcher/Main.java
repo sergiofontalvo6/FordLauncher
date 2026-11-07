@@ -652,11 +652,11 @@ public class Main extends Activity {
         blp.gravity = Gravity.CENTER;
         root.addView(board, blp);
 
-        // franja del dock ultra baja (48dp)
+        // franja del dock (60dp, letras 12sp para que se vean mejor)
         View dockBg = new View(this);
         dockBg.setBackgroundColor(DOCK);
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                (int) (H - ((H - 600 * s) / 2 + 542 * s)) + 1);
+                (int) (H - ((H - 600 * s) / 2 + 540 * s)) + 1);
         dlp.gravity = Gravity.BOTTOM;
         root.addView(dockBg, 0, dlp);
 
@@ -965,12 +965,12 @@ public class Main extends Activity {
             b.setOrientation(LinearLayout.HORIZONTAL);
             b.setGravity(Gravity.CENTER);
             b.setBackground(round(Color.TRANSPARENT, 8));
-            b.addView(circleIcon(icons[i], 36, 20, CIRCLE), new LinearLayout.LayoutParams((int) (36 * s), (int) (36 * s)));
-            TextView l = tv(names[i], 9, SOFT, false);
+            b.addView(circleIcon(icons[i], 40, 22, CIRCLE), new LinearLayout.LayoutParams((int) (40 * s), (int) (40 * s)));
+            TextView l = tv(names[i], 12, TEXT, true);
             l.setGravity(Gravity.CENTER);
             l.setPadding((int) (4 * s), 0, 0, 0);
             b.addView(l, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            place(board, b, 8 + 112 * i, 548, 104, 48);
+            place(board, b, 8 + 112 * i, 540, 104, 60);
             b.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
                     switch (idx) {
@@ -1023,7 +1023,7 @@ public class Main extends Activity {
         lp.topMargin = (int)(8*s);
         close.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ closeObdDiag(); } });
         workshopView.addView(close, lp);
-        place(board, workshopView, 0, 56, 1024, 492);
+        place(board, workshopView, 0, 56, 1024, 484);
         workshopView.bringToFront();
         // Conectar con MAC por defecto si el usuario ya emparejó ELM327
         try { getObdRepo().connect(null); } catch (Throwable ignored) {}
