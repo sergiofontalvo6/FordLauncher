@@ -38,20 +38,21 @@ public class DiagnosticoView {
     private final Map<String, View> dotByZone = new java.util.HashMap<String, View>();
     private CarTopView carView;
 
-    private static final int BG = 0xFF0D1117;
-    private static final int CARD = 0xFF161B22;
-    private static final int INNER = 0xFF21262D;
-    private static final int MUTED = 0xFF8B949E;
-    private static final int SOFT = 0xFFC5C8CE;
-    private static final int TEXT = 0xFFF2F3F5;
-    private static final int BORDER = 0xFF30363D;
+    private int BG() { return Main.BG; }
+    private int CARD() { return Main.CARD; }
+    private int INNER() { return Main.INNER; }
+    private int MUTED() { return Main.MUTED; }
+    private int SOFT() { return Main.SOFT; }
+    private int TEXT() { return Main.TEXT; }
+    private int BORDER() { return Main.BTN; }
+    private int ACCENT() { return Main.RED; }
 
     public DiagnosticoView(Main h, float scale) { host = h; s = scale; repo = h.getObdRepo(); }
 
     public LinearLayout build() {
         LinearLayout root = new LinearLayout(host);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(BG);
+        root.setBackgroundColor(BG());
         root.setPadding((int)(12*s),(int)(12*s),(int)(12*s),(int)(12*s));
 
         ScrollView sc = new ScrollView(host);
@@ -97,9 +98,9 @@ public class DiagnosticoView {
     private LinearLayout card(LinearLayout col, String titleSmall) {
         LinearLayout card = new LinearLayout(host);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(rounded(CARD, 16, 0));
+        card.setBackground(rounded(CARD(), 16, 0));
         card.setPadding((int)(14*s),(int)(12*s),(int)(14*s),(int)(12*s));
-        TextView h = txt(titleSmall, 11, MUTED, true);
+        TextView h = txt(titleSmall, 11, MUTED(), true);
         h.setText(titleSmall.toUpperCase());
         card.addView(h, new LinearLayout.LayoutParams(-1,-2));
         col.addView(card, new LinearLayout.LayoutParams(-1,-2));
@@ -108,7 +109,7 @@ public class DiagnosticoView {
         return card;
     }
     private TextView subtitle(LinearLayout card, String text) {
-        TextView t = txt(text, 12, SOFT, false);
+        TextView t = txt(text, 12, SOFT(), false);
         t.setPadding(0,(int)(4*s),0,(int)(8*s));
         card.addView(t, new LinearLayout.LayoutParams(-1,-2));
         return t;
@@ -145,7 +146,7 @@ public class DiagnosticoView {
             body.lineTo(14,122);
             body.cubicTo(15,72, 22,40, 42,26);
             body.close();
-            Paint bodyP = new Paint(); bodyP.setColor(0xFF2A4A6B); bodyP.setAntiAlias(true);
+            Paint bodyP = new Paint(); bodyP.setColor(ACCENT()); bodyP.setAntiAlias(true); bodyP.setAlpha(Main.LIGHT? 120 : 170); bodyP.setColorFilter(new android.graphics.PorterDuffColorFilter(Main.LIGHT? 0xFFBFD4E6 : 0xFF2A4A6B, android.graphics.PorterDuff.Mode.SRC_ATOP));
             c.drawPath(body, bodyP);
             // parabrisas/techo/medallón
             Path ws = new Path(); ws.moveTo(36,124); ws.cubicTo(72,114,128,114,164,124); ws.lineTo(158,178); ws.cubicTo(128,171,72,171,42,178); ws.close();
@@ -200,19 +201,23 @@ public class DiagnosticoView {
     private LinearLayout miniCard(String titleName, String zoneKey) {
         LinearLayout b = new LinearLayout(host);
         b.setOrientation(LinearLayout.VERTICAL);
-        b.setBackground(rounded(INNER, 10, BORDER));
+        b.setBackground(rounded(INNER(), 10, BORDER()));
         b.setPadding((int)(8*s),(int)(8*s),(int)(8*s),(int)(8*s));
         LinearLayout head = new LinearLayout(host);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
         View dot = new View(host);
-        dot.setBackground(rounded(MUTED, 6, 0));
+        dot.setBackground(rounded(MUTED(), 6, 0));
         head.addView(dot, new LinearLayout.LayoutParams((int)(10*s),(int)(10*s)));
-        TextView h = txt("● " + titleName, 11, SOFT, false);
+        TextView h = txt("● " + titleName, 11, SOFT(), false);
+        h.setMaxLines(1);
+        h.setEllipsize(android.text.TextUtils.TruncateAt.END);
         h.setPadding((int)(6*s),0,0,0);
         head.addView(h);
         b.addView(head, new LinearLayout.LayoutParams(-1,-2));
-        TextView v = txt("--", 14, TEXT, true);
+        TextView v = txt("--", 11, TEXT(), true);
+        v.setMaxLines(1);
+        v.setEllipsize(android.text.TextUtils.TruncateAt.END);
         v.setPadding(0,(int)(4*s),0,0);
         b.addView(v, new LinearLayout.LayoutParams(-1,-2));
         valueByZone.put(zoneKey, v);
@@ -270,17 +275,17 @@ public class DiagnosticoView {
         return f!=null? String.format("%.0f",f)+unit : "--";
     }
     private int zoneColor(Health.HealthLevel l) {
-        if (l==Health.HealthLevel.GOOD) return 0xFF3FB950;
+        if (l==Health.HealthLevel.GOOD) return 0xFF4CAF50;
         if (l==Health.HealthLevel.WARN) return 0xFFD29922;
-        if (l==Health.HealthLevel.FAULT) return 0xFFF85149;
-        return MUTED;
+        if (l==Health.HealthLevel.FAULT) return 0xFFF44336;
+        return MUTED();
     }
 
     private void buildAdapterCard(LinearLayout col) {
         LinearLayout card = card(col, "Adaptador OBD");
-        statusTv = txt("", 14, TEXT, true);
+        statusTv = txt("", 14, TEXT(), true);
         card.addView(statusTv, new LinearLayout.LayoutParams(-1,-2));
-        TextView help = txt("Empareja el ELM327 (ej. " + ObdRepository.DEFAULT_MAC + ") en Ajustes de Android, o escanea por Bluetooth / Wi-Fi. Conecta y escanea DTCs aquí.", 12, MUTED, false);
+        TextView help = txt("Empareja el ELM327 (ej. " + ObdRepository.DEFAULT_MAC + ") en Ajustes de Android, o escanea por Bluetooth / Wi-Fi. Conecta y escanea DTCs aquí.", 12, MUTED(), false);
         help.setSingleLine(false);
         help.setPadding(0,(int)(4*s),0,(int)(8*s));
         card.addView(help, new LinearLayout.LayoutParams(-1,-2));
@@ -294,9 +299,9 @@ public class DiagnosticoView {
         refreshConn();
     }
     private void compactButton(LinearLayout row, String label, final Runnable r) {
-        TextView b = txt(label, 12, TEXT, false);
+        TextView b = txt(label, 12, TEXT(), false);
         b.setGravity(Gravity.CENTER);
-        GradientDrawable g = rounded(INNER, 10, BORDER);
+        GradientDrawable g = rounded(INNER(), 10, BORDER());
         b.setBackground(g);
         b.setPadding((int)(10*s),(int)(9*s),(int)(10*s),(int)(9*s));
         b.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ r.run(); } });
@@ -321,11 +326,13 @@ public class DiagnosticoView {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView d = txt(desc, 12, SOFT, false);
+        TextView d = txt(desc, 12, SOFT(), false);
         d.setSingleLine(false);
         row.addView(d, new LinearLayout.LayoutParams(0,-2,1f));
         Switch sw = new Switch(host);
         sw.setChecked(host.getPrefs().getBoolean(prefKey, false));
+        sw.setThumbTintList(android.content.res.ColorStateList.valueOf(ACCENT()));
+        sw.setTrackTintList(android.content.res.ColorStateList.valueOf(ACCENT()));
         sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener(){
             public void onCheckedChanged(android.widget.CompoundButton b, boolean c){
                 host.getPrefs().edit().putBoolean(prefKey, c).apply();
