@@ -13,7 +13,7 @@ import org.json.JSONObject;
  */
 public class Updates {
 
-    public static final String OWNER = "lordnordic-debug";
+    public static final String OWNER = "sergiofontalvo6";
     public static final String REPO = "FordLauncher";
     public static final String REPO_URL = "https://github.com/" + OWNER + "/" + REPO;
     public static final String RELEASES_URL = REPO_URL + "/releases/latest";

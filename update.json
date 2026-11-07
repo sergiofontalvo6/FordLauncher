@@ -1,6 +1,6 @@
 {
   "version": "2.9.3",
   "notes": "## FordLauncher 2.9.3 — El inicio vuelve a ser lo primero que ves\n\n### Corregido\n- **«Audio Bluetooth» ya no se abre solo al encender el carro.** Desde la 2.9.1, al arrancar con el celular sonando, FordLauncher lo tomaba como «empezó a sonar», abría «Audio Bluetooth» y a veces no volvía. Ahora el primer estado que ve no cuenta, y no hace nada durante el primer minuto.\n- **El cambio automático al dar play en el celular queda apagado por defecto** y marcado «en prueba». En pantallas como la del Kia Picanto, el sistema no avisa cuándo el celular empieza a sonar si otra fuente (la radio) tiene el sonido. Lo que sí funciona siempre es **tocar ▶ en el inicio de FordLauncher**: pasa el sonido a Bluetooth y pausa la radio.\n\n### Novedades\n- **¿Qué app abre cada botón?** El asistente inicial ahora muestra qué app abre Radio, Bluetooth, Música Bluetooth, Cámara, Archivos y Android Auto en tu pantalla, y deja cambiar cualquiera con un toque. También está en **Ajustes → Accesos y apps → Revisar todos los botones**, y cada botón muestra la app que se detectó automáticamente.",
-  "url": "https://github.com/lordnordic-debug/FordLauncher/releases/tag/v2.9.3",
-  "apk": "https://github.com/lordnordic-debug/FordLauncher/releases/download/v2.9.3/FordLauncher-2.9.3.apk"
+  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.9.3",
+  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.9.3/FordLauncher-2.9.3.apk"
 }

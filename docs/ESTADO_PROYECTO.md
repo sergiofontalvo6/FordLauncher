@@ -5,11 +5,11 @@
 ## Publicado
 - Release v2.8.0 en GitHub, firmado con la llave de publicación (secretos de GitHub). La firma coincide con las versiones instaladas a mano, así que se instala encima sin perder la configuración.
 - `update.json` en `main`: lo actualiza el bot de `release.yml`. La app lo usa para el aviso de actualización.
-- Página web: `site/`, publicada con `pages.yml` en https://lordnordic-debug.github.io/FordLauncher/. El botón de descarga toma solo el último release desde la API de GitHub.
+- Página web: `site/`, publicada con `pages.yml` en https://sergiofontalvo6.github.io/FordLauncher/. El botón de descarga toma solo el último release desde la API de GitHub.
 - Donaciones: Ko-fi activo (`ko-fi.com/fordlauncher`) en el README, `.github/FUNDING.yml` y el botón «Donar» de la app.
 
 ## Pendientes, en orden
-1. **GitHub Sponsors:** el perfil está listo y espera que soporte de GitHub corrija el nombre de facturación (ticket #4952223). Cuando lo aprueben y Andrés publique, activar `github: lordnordic-debug` en `.github/FUNDING.yml` y en la sección «Apoya el proyecto» del README.
+1. **GitHub Sponsors:** el perfil está listo y espera que soporte de GitHub corrija el nombre de facturación (ticket #4952223). Cuando lo aprueben y Sergio publique, activar `github: sergiofontalvo6` en `.github/FUNDING.yml` y en la sección «Apoya el proyecto» del README.
 2. **Confirmar 2.9.3 en la pantalla de Andrés:** al encender, debe verse el inicio (no «Audio Bluetooth»); ▶ del inicio pasa de radio a Bluetooth; revisar el nuevo paso «¿Qué app abre cada botón?». Pendiente de investigar: detectar el play del celular cuando la radio tiene el sonido (ver notas técnicas); con la opción en prueba activada, mirar *Música → Diagnóstico del reproductor* para ver si llega el evento «el celular empezó a sonar».
 3. **Bluetooth en otras marcas:** la 2.9.0 trae una opción en prueba (abrir la app BT al conectar y volver). Para soporte nativo de cada marca, pedir `FordDiag` exportado **con el celular sonando** (incluye `bluetooth.txt` con los servicios activos) y su app BT (apk/odex).
 4. **App de música preferida:** opción en *Ajustes → Música* para elegir una app (Musicolet, Spotify…). Si no suena nada y se toca ▶ en el inicio, FordLauncher abre o arranca esa app (primero con tecla multimedia dirigida a su receptor; si no responde, abriéndola). Origen: comentario de Oscar Pizarro (Sonic 2015) en Facebook: Musicolet solo se controla después de abrirla; Moodmax no se controla desde el inicio (revisar si publica MediaSession; pedirle API y *Diagnóstico del reproductor*).

@@ -4,10 +4,10 @@ Categories:
   - Navigation
   - System
 License: GPL-3.0-only
-AuthorName: Andrés (lordnordic-debug)
-SourceCode: https://github.com/lordnordic-debug/FordLauncher
-IssueTracker: https://github.com/lordnordic-debug/FordLauncher/issues
-Changelog: https://github.com/lordnordic-debug/FordLauncher/releases
+AuthorName: Sergio (sergiofontalvo6)
+SourceCode: https://github.com/sergiofontalvo6/FordLauncher
+IssueTracker: https://github.com/sergiofontalvo6/FordLauncher/issues
+Changelog: https://github.com/sergiofontalvo6/FordLauncher/releases
 
 AutoName: FordLauncher
 
@@ -17,7 +17,7 @@ AntiFeatures:
     en-US: Optionally uses Esri map tiles and BigDataCloud (city name).
 
 RepoType: git
-Repo: https://github.com/lordnordic-debug/FordLauncher.git
+Repo: https://github.com/sergiofontalvo6/FordLauncher.git
 
 Builds:
   - versionName: 2.8.0

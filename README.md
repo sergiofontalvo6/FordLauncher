@@ -3,16 +3,16 @@
 <h1>FordLauncher</h1>
 <b>Auto Head Unit UI · Una nueva vida para la pantalla Android de tu carro</b>
 <br><br>
-<a href="https://github.com/lordnordic-debug/FordLauncher/releases"><img src="https://img.shields.io/github/v/release/lordnordic-debug/FordLauncher?color=FE3211&label=versi%C3%B3n"></a>
-<a href="https://github.com/lordnordic-debug/FordLauncher/releases"><img src="https://img.shields.io/github/downloads/lordnordic-debug/FordLauncher/total?color=FE3211&label=descargas"></a>
+<a href="https://github.com/sergiofontalvo6/FordLauncher/releases"><img src="https://img.shields.io/github/v/release/sergiofontalvo6/FordLauncher?color=FE3211&label=versi%C3%B3n"></a>
+<a href="https://github.com/sergiofontalvo6/FordLauncher/releases"><img src="https://img.shields.io/github/downloads/sergiofontalvo6/FordLauncher/total?color=FE3211&label=descargas"></a>
 <img src="https://img.shields.io/badge/Android-4.1%2B-3DDC84?logo=android&logoColor=white">
-<a href="LICENSE"><img src="https://img.shields.io/github/license/lordnordic-debug/FordLauncher?label=licencia"></a>
-<a href="https://github.com/lordnordic-debug/FordLauncher/actions/workflows/android.yml"><img src="https://github.com/lordnordic-debug/FordLauncher/actions/workflows/android.yml/badge.svg"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/sergiofontalvo6/FordLauncher?label=licencia"></a>
+<a href="https://github.com/sergiofontalvo6/FordLauncher/actions/workflows/android.yml"><img src="https://github.com/sergiofontalvo6/FordLauncher/actions/workflows/android.yml/badge.svg"></a>
 <br><br>
-<b>🌐 <a href="https://lordnordic-debug.github.io/FordLauncher/">lordnordic-debug.github.io/FordLauncher</a></b>
+<b>🌐 <a href="https://sergiofontalvo6.github.io/FordLauncher/">sergiofontalvo6.github.io/FordLauncher</a></b>
 <br><br>
 <h4>Descargar</h4>
-<a href="https://github.com/lordnordic-debug/FordLauncher/releases/latest"><img src="https://raw.githubusercontent.com/NeoApplications/Neo-Backup/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png" width="200" alt="Descargar en GitHub"></a>
+<a href="https://github.com/sergiofontalvo6/FordLauncher/releases/latest"><img src="https://raw.githubusercontent.com/NeoApplications/Neo-Backup/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png" width="200" alt="Descargar en GitHub"></a>
 <br>
 <sub>IzzyOnDroid y F-Droid: próximamente</sub>
 </div>
@@ -48,7 +48,7 @@ Nació para revivir las radios chinas que dicen *«Android 6 o superior»* pero 
 
 ## 📥 Instalación
 
-1. Descarga **`FordLauncher-x.y.z.apk`** desde [Releases](https://github.com/lordnordic-debug/FordLauncher/releases/latest).
+1. Descarga **`FordLauncher-x.y.z.apk`** desde [Releases](https://github.com/sergiofontalvo6/FordLauncher/releases/latest).
 2. Cópialo a una memoria USB y, en la pantalla, **pásalo a la memoria interna** con el explorador de archivos. En muchas radios el instalador no puede leer directamente la USB.
 3. En la pantalla activa **Ajustes → Seguridad → Orígenes desconocidos**.
 4. Toca el APK e instálalo.
@@ -68,7 +68,7 @@ Nació para revivir las radios chinas que dicen *«Android 6 o superior»* pero 
 | Android | 4.1 (API 16) | 4.2 (API 17), pantalla con chip Autochips AC8227 |
 | Pantalla | Cualquier resolución horizontal | 1024×600 |
 
-¿La probaste en otra pantalla? Cuéntalo en un [issue](https://github.com/lordnordic-debug/FordLauncher/issues) para sumarla a la tabla.
+¿La probaste en otra pantalla? Cuéntalo en un [issue](https://github.com/sergiofontalvo6/FordLauncher/issues) para sumarla a la tabla.
 
 ## ❓ Preguntas frecuentes
 
@@ -120,13 +120,13 @@ FordLauncher es y seguirá siendo **gratis**. Si revivió tu pantalla, puedes ap
 
 ## 📈 Historial de estrellas
 
-<a href="https://star-history.com/#lordnordic-debug/FordLauncher&Date">
-<img src="https://api.star-history.com/svg?repos=lordnordic-debug/FordLauncher&type=Date" alt="Historial de estrellas" width="600">
+<a href="https://star-history.com/#sergiofontalvo6/FordLauncher&Date">
+<img src="https://api.star-history.com/svg?repos=sergiofontalvo6/FordLauncher&type=Date" alt="Historial de estrellas" width="600">
 </a>
 
 ## 👥 Colaboradores
 
-<a href="https://github.com/lordnordic-debug/FordLauncher/graphs/contributors"><img src="https://contrib.rocks/image?repo=lordnordic-debug/FordLauncher"></a>
+<a href="https://github.com/sergiofontalvo6/FordLauncher/graphs/contributors"><img src="https://contrib.rocks/image?repo=sergiofontalvo6/FordLauncher"></a>
 
 ## ⚖️ Aviso legal
 
