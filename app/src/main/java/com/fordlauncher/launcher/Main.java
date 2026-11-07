@@ -658,15 +658,15 @@ public class Main extends Activity {
         blp.gravity = Gravity.CENTER;
         root.addView(board, blp);
 
-        // franja del dock a todo el ancho (aunque la pantalla no sea 1024x600)
+        // franja del dock ultra baja (48dp): a todo ancho, pegada abajo
         View dockBg = new View(this);
         dockBg.setBackgroundColor(DOCK);
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                (int) (H - ((H - 600 * s) / 2 + 456 * s)) + 1);
+                (int) (H - ((H - 600 * s) / 2 + 542 * s)) + 1);
         dlp.gravity = Gravity.BOTTOM;
         root.addView(dockBg, 0, dlp);
 
-        // Contenedores: dashboard (3 tarjetas) y embebidas (superpuesto central).
+        // Contenedores a todo ancho (sin márgenes laterales): dashboard y embebidas.
         dashboardViewContainer = new FrameLayout(this);
         dashboardViewContainer.setId(0x102001);
         board.addView(dashboardViewContainer, new FrameLayout.LayoutParams(-1, -1));
@@ -674,7 +674,7 @@ public class Main extends Activity {
         embeddedAppContainer.setId(0x102002);
         embeddedAppContainer.setBackgroundColor(CARD);
         embeddedAppContainer.setVisibility(View.GONE);
-        place(board, embeddedAppContainer, 16, 56, 992, 418);
+        place(board, embeddedAppContainer, 0, 56, 1024, 492);
 
         buildTop();
         buildCarCard();
@@ -981,15 +981,15 @@ public class Main extends Activity {
         for (int i = 0; i < 9; i++) {
             final int idx = i;
             LinearLayout b = new LinearLayout(this);
-            b.setOrientation(LinearLayout.VERTICAL);
-            b.setGravity(Gravity.CENTER_HORIZONTAL);
-            b.setBackground(round(Color.TRANSPARENT, 12));
-            b.addView(circleIcon(icons[i], 54, 24, CIRCLE), new LinearLayout.LayoutParams((int) (54 * s), (int) (54 * s)));
-            TextView l = tv(names[i], 12, SOFT, false);
-            l.setGravity(Gravity.CENTER_HORIZONTAL);
-            l.setPadding(0, (int) (6 * s), 0, 0);
-            b.addView(l, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            place(board, b, 20 + 110 * i, 474, 100, 110);
+            b.setOrientation(LinearLayout.HORIZONTAL);
+            b.setGravity(Gravity.CENTER);
+            b.setBackground(round(Color.TRANSPARENT, 8));
+            b.addView(circleIcon(icons[i], 36, 20, CIRCLE), new LinearLayout.LayoutParams((int) (36 * s), (int) (36 * s)));
+            TextView l = tv(names[i], 9, SOFT, false);
+            l.setGravity(Gravity.CENTER);
+            l.setPadding((int) (4 * s), 0, 0, 0);
+            b.addView(l, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            place(board, b, 8 + 112 * i, 548, 104, 48);
             dockViews.add(b);
             b.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
@@ -1057,6 +1057,10 @@ public class Main extends Activity {
 
     private void showEmbedded(int idx) {
         if (activeDock == idx) { showDashboard(); return; }
+        // Respetar apps configuradas: si hay app guardada con ActivityView/API 29+, incrusta esa actividad;
+        // si no, fallback interno (reproductor/browser) o intent clásico en showExternal.
+        if (idx == 2 && prefs.getString("music", null) != null) { showExternal(2, 2); return; }
+        if (idx == 4 && prefs.getString("web", null) != null) { showExternalWeb(); return; }
         activeDock = idx;
         if (dashboardViewContainer != null) dashboardViewContainer.setVisibility(View.GONE);
         if (embeddedAppContainer != null) {
@@ -1072,6 +1076,37 @@ public class Main extends Activity {
         else if (idx == 7) embeddedSettings();
         else if (idx == 8) embeddedApps();
         updateDockHighlight();
+    }
+
+    private void showExternalWeb() {
+        // Navegador configurado (web) con ActivityView en API 29+, si no openBrowser() clásico.
+        try {
+            String saved = prefs.getString("web", null);
+            if (saved != null) {
+                ComponentName cn = ComponentName.unflattenFromString(saved);
+                Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(cn).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                // Intentamos embebir vía ActivityView en API 29+ (misma ruta que showExternal)
+                if (SDK >= 29) {
+                    try {
+                        Class<?> av = Class.forName("android.app.ActivityView");
+                        View v = (View) av.getConstructor(Context.class).newInstance(this);
+                        activeDock = 4;
+                        dashboardViewContainer.setVisibility(View.GONE);
+                        embeddedAppContainer.removeAllViews();
+                        embeddedAppContainer.addView(v, new FrameLayout.LayoutParams(-1, -1));
+                        embeddedAppContainer.setVisibility(View.VISIBLE);
+                        av.getMethod("performClick").invoke(v);
+                        startActivity(i);
+                        updateDockHighlight();
+                        return;
+                    } catch (Throwable ignored) {}
+                }
+                // Fallback: intent clásico (dock sigue en Main al volver)
+                startActivity(i);
+                return;
+            }
+        } catch (Throwable ignored) {}
+        embeddedBrowser();
     }
 
     private void showExternal(int dockIdx, int slotIdx) {
@@ -1094,7 +1129,7 @@ public class Main extends Activity {
                         Class<?> ao = Class.forName("android.app.ActivityOptions");
                         java.lang.reflect.Method mk = ao.getMethod("makeBasic");
                         opts = mk.invoke(null);
-                        ao.getMethod("setLaunchBounds", android.graphics.Rect.class).invoke(opts, new android.graphics.Rect(0, 0, (int) (992 * s), (int) (418 * s)));
+                        ao.getMethod("setLaunchBounds", android.graphics.Rect.class).invoke(opts, new android.graphics.Rect(0, 0, (int) (1024 * s), (int) (492 * s)));
                     } catch (Throwable ignored) {}
                     try {
                         if (r != null) {
