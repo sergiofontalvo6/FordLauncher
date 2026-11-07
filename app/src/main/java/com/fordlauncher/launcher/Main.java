@@ -121,7 +121,7 @@ public class Main extends Activity {
     static final int SDK = android.os.Build.VERSION.SDK_INT;
     private PlayerArt playerArt;
     // estado de la pista
-    private String curTitle, curArtist, curSource, curAlbum;
+    private String curTitle, curArtist, curSource, curAlbum, curPkg;
     private Bitmap curArt;
     private long durMs = -1, posBaseMs = 0, posBaseAt = 0;
     private boolean posKnown;
@@ -1168,6 +1168,12 @@ public class Main extends Activity {
                 if (idle && code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) { openSlot(2); return; }
                 final String beforeTitle = curTitle;
                 final boolean isSkip = (which != 0);
+                // Seldia Music: su skip por MediaSession no avanza (cola de 1). Usa sus acciones internas.
+                if (isSeldia() && sendSeldiaCommand(which)) {
+                    done = true;
+                    h.postDelayed(new Runnable() { public void run() { updatePlayIcon(); if (mediaWatcher != null) mediaWatcher.start(); } }, 600);
+                    return;
+                }
                 if (mediaWatcher != null) {
                     try { done = mediaWatcher.command(which); } catch (Throwable ignored) { }
                 }
@@ -1178,7 +1184,9 @@ public class Main extends Activity {
                         public void run() {
                             String nowTitle = curTitle;
                             if (beforeTitle != null && beforeTitle.equals(nowTitle)) {
-                                if (!sendBtCommand(code)) sendMediaKey(code);
+                                if (isSeldia()) {
+                                    if (!sendSeldiaCommand(which)) sendMediaKey(code);
+                                } else if (!sendBtCommand(code)) sendMediaKey(code);
                                 if (mediaWatcher != null) mediaWatcher.start();
                             }
                             updatePlayIcon();
@@ -1187,6 +1195,26 @@ public class Main extends Activity {
                 }
             }
         };
+    }
+
+    private boolean isSeldia() {
+        if ("com.seldia.music".equals(curPkg)) return true;
+        return curSource != null && curSource.toLowerCase().contains("seldia");
+    }
+
+    /** Acciones internas de Seldia Music (PlaybackActionReceiver). Requiere receiver exportado en Seldia. */
+    private boolean sendSeldiaCommand(int which) {
+        String action = which == 1 ? "com.seldia.music.action.NEXT"
+                : which == -1 ? "com.seldia.music.action.PREVIOUS"
+                : "com.seldia.music.action.PLAY_PAUSE";
+        try {
+            Intent i = new Intent(action);
+            i.setPackage("com.seldia.music");
+            sendBroadcast(i);
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     /** Si suena Bluetooth, controla directamente la app Bluetooth de fábrica (com.clw.btmusic). */
@@ -1251,7 +1279,7 @@ public class Main extends Activity {
         } else if (hasContent && !t.clear) curOrigin = t.origin;
         if (t.clear) {
             curOrigin = null;
-            curTitle = curArtist = curSource = curAlbum = null;
+            curTitle = curArtist = curSource = curAlbum = curPkg = null;
             curArt = null;
             durMs = -1;
             posKnown = false;
@@ -1276,6 +1304,7 @@ public class Main extends Activity {
         if (t.artist != null) curArtist = t.artist;
         if (t.album != null) curAlbum = t.album;
         if (t.source != null) curSource = t.source;
+        if (t.pkg != null) curPkg = t.pkg;
         if (t.durationMs > 0) durMs = t.durationMs;
         if (t.artSet && t.art != null) curArt = t.art;
         long pos = currentPos();

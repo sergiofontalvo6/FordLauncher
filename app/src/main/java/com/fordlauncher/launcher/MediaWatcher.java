@@ -82,6 +82,7 @@ public class MediaWatcher {
             t.clear = true;
             t.artSet = true;
         } else {
+            t.pkg = current.getPackageName();
             try {
                 t.source = String.valueOf(ctx.getPackageManager().getApplicationLabel(
                         ctx.getPackageManager().getApplicationInfo(current.getPackageName(), 0)));

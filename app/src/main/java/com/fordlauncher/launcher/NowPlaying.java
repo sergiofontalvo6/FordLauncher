@@ -19,7 +19,7 @@ import android.os.Looper;
 public class NowPlaying {
 
     public static class Track {
-        public String title, artist, album, source;
+        public String title, artist, album, source, pkg;
         public Boolean playing;          // null = desconocido
         public long durationMs = -1;     // -1 = desconocido
         public long positionMs = -1;     // -1 = desconocido
