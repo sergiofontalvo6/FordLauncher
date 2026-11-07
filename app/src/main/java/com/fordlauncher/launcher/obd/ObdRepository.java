@@ -42,6 +42,10 @@ public class ObdRepository {
     private volatile boolean running;
     private Health.EngineReport lastReport;
     private volatile String targetAddress;
+    private final java.util.Map<String, java.util.Deque<Float>> history = new java.util.HashMap<String, java.util.Deque<Float>>();
+    private TripLog.TripRecorder tripRecorder;
+    private TripLog.TripSummary lastTrip;
+    private final TripLog.AccelTimer accel = new TripLog.AccelTimer();
 
     public ObdRepository(Context c) { ctx = c.getApplicationContext(); prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE); targetAddress = readTarget(); }
     public void setListener(Listener l) { listener = l; }
@@ -53,6 +57,14 @@ public class ObdRepository {
     public Map<String,Float> getValues() { synchronized(values){ return new HashMap<String,Float>(values); } }
     public Health.EngineReport getLastReport() { return lastReport; }
     public String getTargetAddress() { return targetAddress; }
+    public java.util.List<Float> getHistory(String signal) {
+        synchronized(history) {
+            java.util.Deque<Float> q = history.get(signal);
+            return q != null ? new ArrayList<Float>(q) : new ArrayList<Float>();
+        }
+    }
+    public TripLog.AccelTimer getAccel() { return accel; }
+    public TripLog.TripSummary getLastTrip() { return lastTrip; }
 
     private void setState(State s, String err) { state = s; error = err; if (listener != null) listener.onState(s, err); }
 
@@ -171,6 +183,20 @@ public class ObdRepository {
                     batch.put(d.signal, val);
                 }
                 synchronized(values) { for (Map.Entry<String,Float> e : batch.entrySet()) { if (e.getValue() != null) values.put(e.getKey(), e.getValue()); } }
+                synchronized(history) {
+                    for (Map.Entry<String,Float> e : batch.entrySet()) {
+                        if (e.getValue() == null) continue;
+                        java.util.Deque<Float> q = history.get(e.getKey());
+                        if (q == null) { q = new java.util.ArrayDeque<Float>(); history.put(e.getKey(), q); }
+                        q.addLast(e.getValue());
+                        while (q.size() > 60) q.removeFirst();
+                    }
+                }
+                if (tripRecorder == null) tripRecorder = new TripLog.TripRecorder(System.currentTimeMillis());
+                Map<String,Float> cur = getValues();
+                tripRecorder.add(System.currentTimeMillis(), cur.get(Pids.SPEED), cur.get(Pids.RPM), cur.get(Pids.COOLANT), cur.get(Pids.MAF), cur.get(Pids.FUEL_RATE));
+                Float spd = cur.get(Pids.SPEED);
+                if (spd != null) accel.update(System.currentTimeMillis(), spd);
                 if (listener != null) listener.onValues(getValues());
                 Thread.sleep(60);
             }
