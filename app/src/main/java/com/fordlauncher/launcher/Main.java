@@ -1166,11 +1166,25 @@ public class Main extends Activity {
                 boolean done = false;
                 boolean idle = (curTitle == null && curArtist == null);
                 if (idle && code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) { openSlot(2); return; }
+                final String beforeTitle = curTitle;
+                final boolean isSkip = (which != 0);
                 if (mediaWatcher != null) {
                     try { done = mediaWatcher.command(which); } catch (Throwable ignored) { }
                 }
                 if (!done && !sendBtCommand(code)) sendMediaKey(code);
                 h.postDelayed(new Runnable() { public void run() { updatePlayIcon(); } }, 600);
+                if (isSkip && done) {
+                    h.postDelayed(new Runnable() {
+                        public void run() {
+                            String nowTitle = curTitle;
+                            if (beforeTitle != null && beforeTitle.equals(nowTitle)) {
+                                if (!sendBtCommand(code)) sendMediaKey(code);
+                                if (mediaWatcher != null) mediaWatcher.start();
+                            }
+                            updatePlayIcon();
+                        }
+                    }, 900);
+                }
             }
         };
     }
