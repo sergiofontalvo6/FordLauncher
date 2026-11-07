@@ -117,6 +117,7 @@ public class Main extends Activity {
     private LiveMapView liveMap;
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
+    private boolean askedMediaPerm;
     static final int SDK = android.os.Build.VERSION.SDK_INT;
     private PlayerArt playerArt;
     // estado de la pista
@@ -499,6 +500,7 @@ public class Main extends Activity {
             try { Modern.ensurePermissions(this, 77); } catch (Throwable ignored) { }
         }
         if (mediaWatcher != null) mediaWatcher.start();
+        ensureMediaAccess();
         guardUsb();
         maybeWeather();
         h.postDelayed(new Runnable() { public void run() { autoChecks(); } }, 4000);
@@ -1324,6 +1326,44 @@ public class Main extends Activity {
         } catch (Throwable e) {
             toast("No se pudo abrir Accesibilidad");
         }
+    }
+
+    /** ¿El usuario ya permitió «Acceso a notificaciones» para MediaListener? (necesario para leer MediaSession en Android 5+). */
+    private boolean isNotificationListenerEnabled() {
+        try {
+            String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+            if (flat == null) return false;
+            ComponentName mine = new ComponentName(this, MediaListener.class);
+            String mineFlat = mine.flattenToString();
+            for (String p : flat.split(":")) {
+                ComponentName cn = ComponentName.unflattenFromString(p);
+                if (cn != null && mineFlat.equals(cn.flattenToString())) return true;
+                if (p != null && mineFlat.equals(p)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** Pide Acceso a notificaciones al arrancar si falta, para que MediaSessionManager funcione. */
+    private void ensureMediaAccess() {
+        if (SDK < 18) return;
+        if (askedMediaPerm) {
+            if (isNotificationListenerEnabled() && mediaWatcher != null) mediaWatcher.start();
+            return;
+        }
+        if (isNotificationListenerEnabled() || MediaListener.connected) return;
+        askedMediaPerm = true;
+        new AlertDialog.Builder(this, dlg())
+            .setTitle("Acceso a notificaciones")
+            .setMessage("Para mostrar lo que suena en la tarjeta AUDIO (canción, artista, carátula) Ford Launcher necesita «Acceso a notificaciones».\n\nActívalo y vuelve: la tarjeta se actualizará en tiempo real.")
+            .setPositiveButton("Abrir ajuste", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    try { startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+                    catch (Throwable e) { toast("No se pudo abrir el ajuste"); }
+                }
+            })
+            .setNegativeButton("Ahora no", null)
+            .show();
     }
 
     private long currentPos() {
