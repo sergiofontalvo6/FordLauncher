@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Guía de instalación y preguntas frecuentes
+    url: https://github.com/lordnordic-debug/FordLauncher#-preguntas-frecuentes
+    about: Revisa aquí antes de abrir un reporte (Play Store, EasyConnection, mapa, CarPlay…)

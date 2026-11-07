@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FordLauncher · Una nueva vida para la pantalla Android de tu carro</title>
+<meta name="description" content="Launcher gratis y de código abierto para pantallas Android de carro. Funciona desde Android 4.1, pesa menos de medio mega y no toca el sistema. Android Auto, mapa en vivo, música con carátula y más.">
+<meta name="theme-color" content="#0A0B0E">
+<link rel="icon" href="img/favicon.png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FordLauncher">
+<meta property="og:title" content="FordLauncher · Tu pantalla del carro, como nueva">
+<meta property="og:description" content="Gratis, sin anuncios y de código abierto. Revive esa radio china que dice «Android 6» pero no instala nada. Menos de medio mega, desde Android 4.1.">
+<meta property="og:image" content="https://lordnordic-debug.github.io/FordLauncher/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://lordnordic-debug.github.io/FordLauncher/">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+@font-face{font-family:R;font-weight:400;font-display:swap;src:url(fonts/roboto-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:R;font-weight:500;font-display:swap;src:url(fonts/roboto-latin-500-normal.woff2) format("woff2")}
+@font-face{font-family:R;font-weight:700;font-display:swap;src:url(fonts/roboto-latin-700-normal.woff2) format("woff2")}
+@font-face{font-family:R;font-weight:900;font-display:swap;src:url(fonts/roboto-latin-900-normal.woff2) format("woff2")}
+:root{--bg:#0A0B0E;--bg2:#101217;--panel:#14171D;--panel2:#1A1E25;--line:rgba(255,255,255,.08);--t:#F2F3F5;--m:#9AA0AA;--a:#FE3211;--a2:#FF6A3D;--ok:#3DDC84;--r:22px}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--t);font-family:R,system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;height:auto;display:block}
+.mi{display:inline-block;flex:none;width:var(--s,24px);height:var(--s,24px);background:currentColor;-webkit-mask:var(--i) center/contain no-repeat;mask:var(--i) center/contain no-repeat}
+.wrap{width:min(1180px,100% - 40px);margin:0 auto}
+.acc{color:var(--a)}
+em.hl{font-style:normal;background:linear-gradient(90deg,var(--a),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---------- Barra superior ---------- */
+header{position:fixed;inset:0 0 auto;z-index:50;transition:background .3s,border-color .3s;border-bottom:1px solid transparent}
+header.sc{background:rgba(10,11,14,.78);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-color:var(--line)}
+.nav{display:flex;align-items:center;gap:28px;height:68px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:900;font-size:20px;letter-spacing:-.3px}
+.brand img{width:34px;height:34px;border-radius:9px}
+.nav ul{display:flex;gap:24px;list-style:none;margin-left:auto;font-size:15px;color:var(--m)}
+.nav ul a:hover{color:var(--t)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:50px;padding:0 22px;border-radius:14px;font-weight:700;font-size:16px;white-space:nowrap;transition:transform .2s,box-shadow .25s,background .2s;cursor:pointer;border:0;font-family:inherit;color:var(--t)}
+.btn:active{transform:scale(.97)}
+.btn-a{background:linear-gradient(135deg,var(--a),var(--a2));color:#fff;box-shadow:0 10px 30px -8px rgba(254,50,17,.6)}
+.btn-a:hover{box-shadow:0 14px 40px -6px rgba(254,50,17,.8);transform:translateY(-2px)}
+.btn-g{background:rgba(255,255,255,.06);border:1px solid var(--line)}
+.btn-g:hover{background:rgba(255,255,255,.1)}
+.btn-s{height:40px;padding:0 16px;font-size:14px;border-radius:11px}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:99px;background:rgba(254,50,17,.12);border:1px solid rgba(254,50,17,.35);color:#FFB3A3;font-size:13px;font-weight:500}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--a);box-shadow:0 0 0 0 rgba(254,50,17,.7);animation:ping 1.8s infinite}
+@keyframes ping{70%{box-shadow:0 0 0 10px rgba(254,50,17,0)}100%{box-shadow:0 0 0 0 rgba(254,50,17,0)}}
+
+/* ---------- Portada ---------- */
+.hero{position:relative;padding:120px 0 24px;overflow:hidden;isolation:isolate}
+.hero:before{content:"";position:absolute;inset:-20% -10% auto;height:900px;z-index:-2;background:radial-gradient(600px 380px at 70% 30%,rgba(254,50,17,.22),transparent 70%),radial-gradient(500px 300px at 15% 10%,rgba(47,124,246,.12),transparent 70%)}
+.road{position:absolute;left:50%;bottom:-6%;width:260%;height:70%;z-index:-1;transform:translateX(-50%) perspective(380px) rotateX(72deg);transform-origin:50% 100%;
+ background:
+  linear-gradient(90deg,transparent 49.6%,rgba(255,255,255,.55) 49.6%,rgba(255,255,255,.55) 50.4%,transparent 50.4%) 0 0/100% 90px,
+  linear-gradient(90deg,transparent 30%,rgba(254,50,17,.55) 30.15%,transparent 30.35%,transparent 69.65%,rgba(254,50,17,.55) 69.85%,transparent 70%),
+  linear-gradient(#15171c,#0a0b0e);
+ -webkit-mask:linear-gradient(transparent,#000 40%);mask:linear-gradient(transparent,#000 40%);animation:drive 1.1s linear infinite;opacity:.55}
+.road{background-size:100% 90px,100% 100%,100% 100%}
+@keyframes drive{to{background-position:0 90px,0 0,0 0}}
+.hero-grid{display:grid;grid-template-columns:1fr;gap:44px;align-items:center;text-align:center}
+.hero h1{font-size:clamp(40px,7vw,78px);line-height:1.02;font-weight:900;letter-spacing:-2px;margin:18px 0 18px}
+.hero p.lead{font-size:clamp(17px,2.2vw,21px);color:#C5C9D0;max-width:720px;margin:0 auto}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.trust{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:center;margin-top:22px;color:var(--m);font-size:14px}
+.trust span{display:inline-flex;align-items:center;gap:6px}
+.trust b{color:var(--ok);font-weight:900}
+.dl-meta{display:block;font-size:12px;font-weight:500;opacity:.85;margin-top:-2px}
+.btn-dl{height:auto;min-height:58px;padding:9px 26px;flex-direction:row}
+.btn-dl .tx{display:flex;flex-direction:column;align-items:flex-start;line-height:1.2}
+
+/* ---------- Pantalla de demostración ---------- */
+.stage{perspective:1600px;margin-top:6px}
+.unit{position:relative;max-width:1060px;margin:0 auto;padding:clamp(8px,1.4vw,16px);border-radius:clamp(16px,2.4vw,30px);
+ background:linear-gradient(160deg,#30343c,#121418 45%,#07080a);box-shadow:0 60px 120px -30px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.07) inset,0 30px 80px -40px rgba(254,50,17,.55);
+ transform:rotateX(16deg) translateY(50px) scale(.94);opacity:0;transition:transform 1.3s cubic-bezier(.2,.8,.2,1),opacity 1s}
+.unit.on{transform:none;opacity:1}
+.unit:after{content:"";position:absolute;inset:clamp(8px,1.4vw,16px);border-radius:clamp(10px,1.6vw,18px);pointer-events:none;
+ background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.07) 45%,transparent 55%) -100% 0/250% 100% no-repeat;animation:sheen 7s ease-in-out infinite 2s}
+@keyframes sheen{0%,60%{background-position:-100% 0}100%{background-position:200% 0}}
+.screen{position:relative;overflow:hidden;border-radius:clamp(10px,1.6vw,18px);background:#000}
+.hu{position:absolute;left:0;top:0;width:1024px;height:600px;transform-origin:0 0;font-family:R,sans-serif;background:var(--bg);color:var(--t);overflow:hidden;transition:background .5s,color .5s;user-select:none;-webkit-user-select:none}
+.hu.dark{--bg:#15171C;--card:#1E2128;--in:#262A33;--btn:#2A2E37;--dock:#0D0E11;--t:#F2F3F5;--m:#8B9099;--soft:#C5C8CE;--c:#23262E;--icn:#E9EBEE;--map:#1A1D23;--road:#2B2F38}
+.hu.light{--bg:#E9ECF1;--card:#FFFFFF;--in:#F1F3F7;--btn:#E2E6EC;--dock:#DDE1E8;--t:#14161B;--m:#6B7280;--soft:#3A404C;--c:#FFFFFF;--icn:#2B303A;--map:#EDF0F4;--road:#D3D8E0}
+.hu *{transition:background-color .5s,color .5s,border-color .5s,fill .5s,stroke .5s}
+.hu .x{position:absolute}
+.hu .card{position:absolute;background:var(--card);border-radius:20px;overflow:hidden}
+.hu .mi{color:var(--icn)}
+.hu .ac{background:var(--hua)!important;color:#fff}
+.hu .tap{cursor:pointer}
+.hu .tap:active{filter:brightness(.9)}
+.hu .dock{position:absolute;left:0;top:456px;width:1024px;height:144px;background:var(--dock)}
+.hu .db{position:absolute;top:18px;width:120px;text-align:center;cursor:pointer}
+.hu .db .c{width:64px;height:64px;border-radius:32px;background:var(--c);margin:0 auto;display:flex;align-items:center;justify-content:center;transition:transform .2s,background-color .5s}
+.hu .db:hover .c{transform:translateY(-3px)}
+.hu .db .l{font-size:13px;color:var(--soft);margin-top:8px}
+.hu .pb{position:absolute;top:10px;width:184px;height:64px;border-radius:14px;display:flex;align-items:center;padding:0 12px;cursor:pointer}
+.hu .art{animation:spin 18s linear infinite}
+.hu .art.paused{animation-play-state:paused}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hu .pulse{transform-origin:245px 170px;animation:pul 2s ease-out infinite}
+@keyframes pul{0%{transform:scale(.6);opacity:.9}100%{transform:scale(2.2);opacity:0}}
+.hu .mapg{animation:pan 26s ease-in-out infinite alternate}
+@keyframes pan{0%{transform:translate(0,0)}100%{transform:translate(-36px,22px)}}
+.hu .eq i{display:inline-block;width:3px;margin:0 1px;background:var(--hua);border-radius:2px;animation:eq .9s ease-in-out infinite alternate}
+.hu .eq i:nth-child(2){animation-delay:-.3s}.hu .eq i:nth-child(3){animation-delay:-.6s}
+.hu .eq.paused i{animation-play-state:paused}
+@keyframes eq{from{height:3px}to{height:12px}}
+.toast{position:absolute;left:50%;bottom:160px;transform:translateX(-50%) translateY(20px);background:rgba(20,22,27,.94);color:#fff;font-size:16px;padding:12px 20px;border-radius:14px;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;white-space:nowrap;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.hu.light .toast{background:rgba(20,22,27,.9)}
+
+/* Controles de la demo */
+.demo-ctl{display:flex;flex-wrap:wrap;gap:12px 18px;justify-content:center;align-items:center;margin:26px auto 0;max-width:1060px;padding:14px 18px;border-radius:18px;background:rgba(255,255,255,.035);border:1px solid var(--line);font-size:14px;color:var(--m)}
+.demo-ctl .lbl{display:flex;align-items:center;gap:8px;color:var(--t);font-weight:500}
+.seg{display:inline-flex;background:rgba(255,255,255,.06);border-radius:11px;padding:3px}
+.seg button{border:0;background:none;color:var(--m);font:500 14px R,sans-serif;padding:7px 14px;border-radius:9px;cursor:pointer;display:flex;align-items:center;gap:6px}
+.seg button.on{background:var(--panel2);color:var(--t);box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.sw{display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
+.sw button{width:26px;height:26px;border-radius:50%;border:2px solid transparent;cursor:pointer;background:var(--c);box-shadow:0 0 0 1px rgba(255,255,255,.15) inset;transition:transform .15s}
+.sw button:hover{transform:scale(1.15)}
+.sw button.on{border-color:#fff}
+.name-in{background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--t);font:15px R,sans-serif;border-radius:10px;padding:8px 12px;width:150px;outline:none}
+.name-in:focus{border-color:var(--a)}
+.hint{text-align:center;color:var(--m);font-size:13px;margin-top:10px}
+
+/* ---------- Secciones ---------- */
+section{position:relative;padding:64px 0}
+section+section{padding-top:24px}
+.kicker{display:inline-block;font-size:13px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--a);margin-bottom:14px}
+h2{font-size:clamp(32px,5vw,54px);line-height:1.06;font-weight:900;letter-spacing:-1.3px}
+.sub{color:#B8BDC6;font-size:clamp(16px,2vw,19px);max-width:680px;margin-top:16px}
+.center{text-align:center}.center .sub{margin-left:auto;margin-right:auto}
+
+/* Dolor */
+.pain{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:48px}
+.pain div{padding:24px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line)}
+.pain code{display:inline-block;font:500 13px ui-monospace,Menlo,monospace;color:#FF8A75;background:rgba(254,50,17,.1);padding:4px 8px;border-radius:7px;margin-bottom:12px}
+.pain p{color:#B8BDC6;font-size:15px}
+.fix{margin-top:18px;padding:26px 28px;border-radius:var(--r);background:linear-gradient(135deg,rgba(254,50,17,.16),rgba(254,50,17,.04));border:1px solid rgba(254,50,17,.35);display:flex;gap:18px;align-items:center}
+.fix .mi{--s:38px;color:var(--a)}
+.fix p{font-size:17px}
+
+/* Números */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+.stat{padding:26px 22px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);position:relative;overflow:hidden}
+.stat b{display:block;font-size:clamp(34px,4.6vw,48px);font-weight:900;letter-spacing:-1.5px;line-height:1}
+.stat>span{display:block;color:var(--m);font-size:14px;margin-top:10px}
+.stat:after{content:"";position:absolute;right:-30px;top:-30px;width:90px;height:90px;border-radius:50%;background:radial-gradient(rgba(254,50,17,.25),transparent 70%)}
+.stats-note{color:#6E747E;font-size:12px;margin-top:12px}
+
+/* Antes / después */
+.ba{position:relative;max-width:980px;margin:48px auto 0;border-radius:24px;overflow:hidden;aspect-ratio:1024/600;box-shadow:0 40px 90px -30px rgba(0,0,0,.9),0 0 0 1px var(--line);touch-action:pan-y;cursor:ew-resize;--p:50%}
+.ba img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ba .after{clip-path:inset(0 0 0 var(--p))}
+.ba .bar{position:absolute;top:0;bottom:0;left:var(--p);width:3px;margin-left:-1.5px;background:#fff;box-shadow:0 0 18px rgba(0,0,0,.6)}
+.ba .knob{position:absolute;top:50%;left:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:#fff;color:#111;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.ba .tag{position:absolute;top:14px;padding:6px 12px;border-radius:9px;font-size:13px;font-weight:700;background:rgba(0,0,0,.6);backdrop-filter:blur(6px)}
+.ba .t1{left:14px}.ba .t2{right:14px;background:var(--a)}
+.ba input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
+
+/* Funciones */
+.feats{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:50px}
+.feat{position:relative;padding:26px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);overflow:hidden;transition:transform .3s,border-color .3s,background .3s}
+.feat:hover{transform:translateY(-4px);border-color:rgba(254,50,17,.4);background:var(--panel2)}
+.feat .ico{width:50px;height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;background:rgba(254,50,17,.13);color:var(--a);margin-bottom:18px;transition:transform .3s}
+.feat:hover .ico{transform:rotate(-8deg) scale(1.08)}
+.feat h3{font-size:19px;font-weight:700;margin-bottom:8px;letter-spacing:-.2px}
+.feat p{color:#AEB3BC;font-size:15px}
+.feat.big{grid-column:span 2}
+@media(max-width:620px){.feat.big{grid-column:auto}}
+.feat .badge{position:absolute;top:18px;right:18px;font-size:11px;font-weight:700;letter-spacing:.5px;padding:4px 9px;border-radius:7px;background:rgba(61,220,132,.13);color:var(--ok)}
+
+/* Conexión */
+.conn{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:48px}
+.cc{padding:30px;border-radius:24px;background:var(--panel);border:1px solid var(--line)}
+.cc.aa{background:linear-gradient(160deg,rgba(254,50,17,.16),var(--panel) 55%)}
+.cc h3{display:flex;align-items:center;gap:12px;font-size:24px;font-weight:900;margin-bottom:14px}
+.cc ul{list-style:none;display:grid;gap:12px;margin-top:6px}
+.cc li{position:relative;padding-left:32px;color:#C2C7CF;font-size:15px}
+.cc li:before{content:"";position:absolute;left:0;top:2px;width:20px;height:20px;border-radius:50%;background:rgba(61,220,132,.15) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-7' fill='none' stroke='%233DDC84' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/16px no-repeat}
+.cc .note{margin-top:18px;font-size:13px;color:var(--m);padding-top:16px;border-top:1px solid var(--line)}
+
+/* Temas */
+.themes{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:48px}
+@media(max-width:760px){.themes{grid-template-columns:1fr}}
+.themes figure{border-radius:20px;overflow:hidden;border:1px solid var(--line);background:var(--panel)}
+.themes figcaption{padding:14px 18px;font-size:14px;color:var(--m);display:flex;align-items:center;gap:8px}
+.palette{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+.palette span{width:38px;height:38px;border-radius:50%;background:var(--c);box-shadow:0 6px 16px -4px var(--c);transition:transform .3s}
+.palette span:hover{transform:translateY(-4px) scale(1.1)}
+
+/* Pasos */
+.steps{display:grid;grid-template-columns:1.4fr 1fr;gap:40px;margin-top:50px;align-items:start}
+@media(max-width:860px){.steps{grid-template-columns:1fr}}
+.steps ol{list-style:none;counter-reset:s;display:grid;gap:14px}
+.steps li{counter-increment:s;position:relative;padding:20px 22px 20px 76px;border-radius:18px;background:var(--panel);border:1px solid var(--line)}
+.steps li:before{content:counter(s);position:absolute;left:20px;top:18px;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--a),var(--a2));display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px}
+.steps li>b{display:block;font-size:17px;margin-bottom:3px}
+.steps li>span{color:#AEB3BC;font-size:15px}
+.qr-card{position:sticky;top:96px;padding:28px;border-radius:24px;background:var(--panel);border:1px solid var(--line);text-align:center}
+.qr-card .qr{background:#fff;border-radius:18px;padding:14px;width:200px;margin:18px auto}
+.qr-card p{color:var(--m);font-size:14px}
+.tip{margin-top:16px;padding:16px 18px;border-radius:16px;background:rgba(47,124,246,.1);border:1px solid rgba(47,124,246,.3);font-size:14px;color:#C9D9F7;text-align:left}
+
+/* Compatibilidad */
+.compat{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:44px}
+.compat div{padding:22px;border-radius:18px;background:var(--panel);border:1px solid var(--line)}
+.compat small{display:block;color:var(--m);font-size:13px;margin-bottom:6px}
+.compat b{font-size:20px}
+
+/* Preguntas */
+.faq{max-width:820px;margin:44px auto 0;display:grid;gap:10px}
+.faq details{border-radius:16px;background:var(--panel);border:1px solid var(--line);overflow:hidden}
+.faq summary{cursor:pointer;list-style:none;padding:20px 56px 20px 22px;font-weight:700;font-size:17px;position:relative}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary:after{content:"+";position:absolute;right:22px;top:50%;transform:translateY(-50%);font-size:26px;font-weight:400;color:var(--a);transition:transform .3s}
+.faq details[open] summary:after{transform:translateY(-50%) rotate(45deg)}
+.faq .ans{padding:0 22px 20px;color:#B8BDC6;font-size:15px}
+.faq details[open] .ans{animation:fadeIn .35s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}}
+
+/* Apoyo */
+.support{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-top:44px}
+.sup{padding:28px;border-radius:22px;background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column;gap:12px}
+.sup h3{font-size:20px;display:flex;align-items:center;gap:10px}
+.sup p{color:#AEB3BC;font-size:15px;flex:1}
+.share{display:flex;gap:10px;flex-wrap:wrap}
+
+/* Cierre */
+.final{text-align:center;padding:56px 0 72px;overflow:hidden}
+.final:before{content:"";position:absolute;inset:0;background:radial-gradient(700px 360px at 50% 60%,rgba(254,50,17,.25),transparent 70%);z-index:-1}
+.final img.lg{width:80px;height:80px;border-radius:20px;margin:0 auto 20px;box-shadow:0 20px 50px -10px rgba(254,50,17,.6);animation:float 5s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-10px) rotate(-3deg)}}
+footer{border-top:1px solid var(--line);padding:40px 0 60px;color:var(--m);font-size:14px}
+footer .row{display:flex;flex-wrap:wrap;gap:16px 28px;justify-content:space-between;align-items:center}
+footer nav{display:flex;flex-wrap:wrap;gap:8px 20px}
+footer nav a:hover{color:var(--t)}
+footer .legal{margin-top:22px;font-size:12px;color:#646A73;max-width:820px}
+
+/* Aparición al bajar */
+.rv{opacity:0;transform:translateY(34px);transition:opacity .8s cubic-bezier(.2,.8,.2,1),transform .8s cubic-bezier(.2,.8,.2,1);transition-delay:var(--d,0s)}
+.rv.in{opacity:1;transform:none}
+
+/* Botón flotante en celular */
+.fab{position:fixed;left:16px;right:16px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:60;display:none;transform:translateY(120%);transition:transform .35s}
+.fab.on{transform:none}
+
+@media(max-width:860px){
+ .nav ul{display:none}
+ .nav .nav-dl{margin-left:auto}
+ section{padding:40px 0}
+ section+section{padding-top:16px}
+ .pain,.feats,.conn,.themes,.steps,.compat,.support,.faq{margin-top:28px!important}
+ .ba{margin-top:28px}
+ .final{padding:40px 0 56px}
+ .demo-ctl{margin-top:18px}
+ body{padding-bottom:84px}
+ .hero{padding-top:104px}
+ .fab{display:block}
+ .fab .btn{width:100%}
+}
+@media(max-width:480px){
+ .nav .gh{display:none}
+ .btn{font-size:15px}
+ .demo-ctl{gap:10px 12px}
+}
+
+/* Aviso para navegadores internos (Facebook, Instagram…) */
+.iab{position:fixed;inset:0;z-index:90;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);padding:16px}
+.iab.on{display:flex}
+.iab-card{width:min(460px,100%);background:var(--panel2);border:1px solid var(--line);border-radius:24px;padding:24px 22px calc(22px + env(safe-area-inset-bottom));box-shadow:0 30px 80px rgba(0,0,0,.6);animation:iabUp .35s cubic-bezier(.2,.8,.2,1)}
+@keyframes iabUp{from{transform:translateY(40px);opacity:0}}
+.iab-card h3{font-size:21px;font-weight:900;margin-bottom:8px}
+.iab-card p{color:#B8BDC6;font-size:15px}
+.iab-card ol{margin:16px 0 18px 0;padding-left:0;list-style:none;display:grid;gap:10px}
+.iab-card li{display:flex;gap:12px;align-items:flex-start;font-size:15px}
+.iab-card li b.n{flex:none;width:26px;height:26px;border-radius:8px;background:var(--a);display:flex;align-items:center;justify-content:center;font-size:14px}
+.iab-card .dots{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:24px;border-radius:7px;background:rgba(255,255,255,.1);font-weight:900;letter-spacing:1px}
+.iab-card .row{display:flex;gap:10px;flex-wrap:wrap}
+.iab-card .row .btn{flex:1 1 160px}
+.iab-card .skip{display:block;margin:14px auto 0;background:none;border:0;color:var(--m);font:14px R,sans-serif;text-decoration:underline;cursor:pointer}
+.iab-bar{position:fixed;left:0;right:0;top:68px;z-index:45;display:none;background:#2A1712;border-bottom:1px solid rgba(254,50,17,.35);color:#FFD2C7;font-size:14px;padding:10px 16px;text-align:center}
+.iab-bar.on{display:block}
+.has-iab .hero{padding-top:170px}
+.iab-bar button{background:none;border:0;color:#fff;font:700 14px R,sans-serif;text-decoration:underline;cursor:pointer;margin-left:6px}
+@media(prefers-reduced-motion:reduce){
+ *,*:before,*:after{animation:none!important;transition:none!important}
+ .rv{opacity:1;transform:none}
+ .unit{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<header id="top">
+ <div class="wrap nav">
+  <a class="brand" href="#"><img src="img/logo-192.png" alt="">FordLauncher</a>
+  <ul>
+   <li><a href="#funciones">Funciones</a></li>
+   <li><a href="#android-auto">Android Auto</a></li>
+   <li><a href="#instalar">Instalar</a></li>
+   <li><a href="#preguntas">Preguntas</a></li>
+  </ul>
+  <a class="btn btn-g btn-s gh" href="https://github.com/lordnordic-debug/FordLauncher" target="_blank" rel="noopener"><span class="mi" style="--i:url(ic/star.png);--s:18px"></span><span data-stars>GitHub</span></a>
+  <a class="btn btn-a btn-s nav-dl" href="https://github.com/lordnordic-debug/FordLauncher/releases/latest" data-dl><span class="mi" style="--i:url(ic/download.png);--s:18px"></span>Descargar</a>
+ </div>
+</header>
+
+<main>
+<!-- ================= PORTADA ================= -->
+<section class="hero">
+ <div class="road" aria-hidden="true"></div>
+ <div class="wrap hero-grid">
+  <div>
+   <span class="pill rv"><i></i>Gratis · Código abierto · Hecho en Colombia</span>
+   <h1 class="rv" style="--d:.08s">Tu pantalla del carro,<br><em class="hl">como nueva.</em></h1>
+   <p class="lead rv" style="--d:.16s">¿Tu radio dice <b>«Android 6»</b> pero no instala nada y el menú parece de 2012? <b>FordLauncher</b> la convierte en una pantalla moderna en minutos: mapa en vivo, Android Auto, música con carátula y velocímetro. <b>Sin flashear, sin root, sin pagar.</b></p>
+   <div class="cta rv" style="--d:.24s">
+    <a class="btn btn-a btn-dl" href="https://github.com/lordnordic-debug/FordLauncher/releases/latest" data-dl>
+     <span class="mi" style="--i:url(ic/download.png);--s:24px"></span>
+     <span class="tx">Descargar gratis<span class="dl-meta" data-dlmeta>APK · menos de 0,5 MB</span></span>
+    </a>
+    <a class="btn btn-g" href="#demo"><span class="mi" style="--i:url(ic/touch_app.png);--s:20px"></span>Pruébala aquí mismo</a>
+   </div>
+   <div class="trust rv" style="--d:.32s">
+    <span><b>✓</b> Desde Android 4.1</span><span><b>✓</b> Sin anuncios</span><span><b>✓</b> Sin cuentas</span><span><b>✓</b> No toca el sistema</span><span><b>✓</b> Se desinstala como cualquier app</span>
+   </div>
+  </div>
+
+  <div id="demo" style="scroll-margin-top:90px">
+   <div class="stage">
+    <div class="unit" id="unit">
+     <div class="screen" id="screen">
+      <div class="hu dark" id="hu" style="--hua:#FE3211">
+       <!-- Encabezado -->
+       <div class="x" style="left:24px;top:10px;display:flex;align-items:baseline"><span id="hClock" style="font-size:30px;font-weight:500">7:42 p.m.</span><span id="hDate" style="font-size:14px;color:var(--m);margin-left:12px">Martes, 4 de noviembre</span></div>
+       <div class="x" style="right:72px;top:20px;display:flex;align-items:center;gap:8px;font-size:15px"><span class="mi" style="--i:url(ic/wb_sunny.png);--s:20px"></span><b style="font-weight:500">32°C</b><span style="color:var(--m);font-size:13px;padding-right:12px;border-right:1px solid var(--btn)">Bogotá</span><span id="hGreet" style="color:var(--soft);padding-left:6px">Buenas noches</span></div>
+       <div class="x tap" data-t="Ajustes de FordLauncher: tu vehículo, colores, conexión y más" style="left:964px;top:12px;width:40px;height:40px;border-radius:20px;background:var(--c);display:flex;align-items:center;justify-content:center"><span class="mi" style="--i:url(ic/settings.png);--s:22px"></span></div>
+
+       <!-- Vehículo -->
+       <div class="card" style="left:16px;top:64px;width:300px;height:380px">
+        <div class="x" style="left:20px;top:16px;font-size:20px;font-weight:500">Mi vehículo</div>
+        <div class="x ac" style="left:20px;top:46px;font-size:11px;font-weight:500;padding:3px 8px;border-radius:8px;letter-spacing:.8px">GT LINE</div>
+        <div class="x tap" data-t="Pon la foto de tu carro: FordLauncher le quita el fondo solo" style="left:18px;top:82px;width:264px;height:152px;background:var(--in);border-radius:16px;overflow:hidden">
+         <svg width="264" height="152" viewBox="0 0 264 152">
+          <ellipse cx="132" cy="122" rx="104" ry="9" fill="#000" opacity=".28"/>
+          <g transform="translate(12 32)">
+           <path d="M8 74 Q9 56 36 51 L64 48 Q90 22 128 20 L160 20 Q188 22 210 46 Q234 50 236 66 L236 76 Q234 83 225 83 L200 83 A23 23 0 0 0 154 83 L84 83 A23 23 0 0 0 38 83 L16 83 Q8 82 8 74 Z" fill="#E4E7EC"/>
+           <path d="M8 74 Q9 56 36 51 L64 48 L236 66 L236 76 Q234 83 225 83 L200 83 A23 23 0 0 0 154 83 L84 83 A23 23 0 0 0 38 83 L16 83 Q8 82 8 74 Z" fill="#C9CED6"/>
+           <path d="M74 47 Q96 27 126 26 L128 47 Z" fill="#2C3440"/><path d="M134 26 L158 26 Q180 28 198 46 L134 47 Z" fill="#2C3440"/>
+                      <rect x="216" y="56" width="16" height="6" rx="3" fill="#FFD27A"/><rect x="10" y="60" width="10" height="6" rx="3" fill="#FF5A4A"/>
+           <circle cx="61" cy="83" r="19" fill="#1B1E23"/><circle cx="61" cy="83" r="10" fill="#9AA1AB"/>
+           <circle cx="177" cy="83" r="19" fill="#1B1E23"/><circle cx="177" cy="83" r="10" fill="#9AA1AB"/>
+          </g>
+         </svg>
+         <div class="x" style="right:8px;top:8px;font-size:10px;font-weight:500;padding:3px 7px;border-radius:7px;background:rgba(61,220,132,.16);color:#2fb36b">✓ Fondo quitado</div>
+        </div>
+        <div class="x" style="left:12px;top:250px;width:276px;height:118px;background:var(--in);border-radius:16px">
+         <div class="x" style="left:16px;top:12px;font-size:13px;color:var(--m)">Velocidad</div>
+         <div class="x" style="right:16px;top:12px;font-size:11px;color:var(--m);display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:4px;background:#3DDC84"></span>GPS</div>
+         <div class="x" style="left:16px;top:34px;font-size:56px;font-weight:500;font-variant-numeric:tabular-nums"><span id="hSpeed">48</span><span style="font-size:15px;color:var(--m);margin-left:8px">km/h</span></div>
+         <div class="x" style="left:16px;right:16px;bottom:9px;height:4px;border-radius:2px;background:var(--btn)"><div id="hSpeedBar" style="height:100%;width:40%;border-radius:2px;background:var(--hua);transition:width .4s linear,background-color .5s"></div></div>
+        </div>
+       </div>
+
+       <!-- Mapa -->
+       <div class="card" style="left:328px;top:64px;width:420px;height:380px;background:var(--map)">
+        <svg class="x" width="420" height="380" style="left:0;top:0"><g class="mapg"><g stroke="var(--road)" fill="none" stroke-linecap="round">
+         <path d="M-60 70 L480 15" stroke-width="12"/><path d="M-60 175 L480 112" stroke-width="18"/><path d="M-60 305 L480 228" stroke-width="10"/>
+         <path d="M50 -40 L130 440" stroke-width="10"/><path d="M230 -40 L262 440" stroke-width="20"/><path d="M370 -40 L338 440" stroke-width="10"/>
+         <path d="M-60 380 L190 210 L480 330" stroke-width="7"/></g>
+         <path d="M245 440 L245 170" stroke="var(--hua)" stroke-width="6" stroke-linecap="round" opacity=".55" stroke-dasharray="2 12"/>
+         <text x="96" y="256" fill="var(--soft)" font-family="R" font-size="13">Av. Simón Bolívar</text><text x="270" y="98" fill="var(--soft)" font-family="R" font-size="12">Parque Central</text></g>
+         <circle class="pulse" cx="245" cy="170" r="18" fill="var(--hua)" fill-opacity=".35"/>
+         <circle cx="245" cy="170" r="22" fill="var(--hua)" fill-opacity=".2"/><path d="M245 156 L255 181 L245 175 L235 181 Z" fill="var(--hua)" stroke="#fff" stroke-width="2"/></svg>
+        <div class="x" style="left:16px;top:16px;background:var(--card);opacity:.94;border-radius:12px;padding:7px 12px;font-size:13px;font-weight:500;display:flex;gap:8px;align-items:center"><span class="mi" style="--i:url(ic/my_location.png);--s:16px"></span>Mapa en vivo</div>
+        <div class="x" style="left:12px;top:284px;width:396px;height:84px;background:var(--card);border-radius:16px;opacity:.97">
+         <div class="pb ac" data-t="Abre Android Auto: Open Headunit por USB o la app de tu pantalla" style="left:10px"><span class="mi" style="--i:url(ic/navigation.png);--s:26px;color:#fff"></span><div style="margin-left:10px"><div style="font-size:15px;font-weight:500">Android Auto</div><div style="font-size:11px;opacity:.85;margin-top:3px">Open Headunit · USB</div></div></div>
+         <div class="pb" data-t="Abre CarPlay si tu pantalla lo trae o usas un adaptador" style="left:202px;background:var(--btn)"><span class="mi" style="--i:url(ic/phone_iphone.png);--s:26px"></span><div style="margin-left:10px"><div style="font-size:15px;font-weight:500">CarPlay</div><div style="font-size:11px;color:var(--m);margin-top:3px">Pantalla o adaptador</div></div></div>
+        </div>
+       </div>
+
+       <!-- Música -->
+       <div class="card" style="left:760px;top:64px;width:248px;height:380px">
+        <div class="x" style="left:18px;top:14px;font-size:11px;font-weight:500;color:var(--m)">AUDIO</div>
+        <div class="x" style="right:18px;top:12px;font-size:11px;font-weight:500;color:var(--hua);display:flex;align-items:flex-end;gap:6px"><span class="eq" id="hEq"><i></i><i></i><i></i></span><span id="hSrc">ANDROID AUTO</span></div>
+        <svg class="x" style="left:34px;top:34px" width="180" height="180"><circle cx="90" cy="90" r="82" fill="none" stroke="var(--btn)" stroke-width="4"/><circle id="hRing" cx="90" cy="90" r="82" fill="none" stroke="var(--hua)" stroke-width="4" stroke-linecap="round" stroke-dasharray="0 600" transform="rotate(-90 90 90)"/></svg>
+        <div id="hArt" class="x art" style="left:54px;top:54px;width:140px;height:140px;border-radius:70px;background:linear-gradient(135deg,#ff8a3d,#c2185b 55%,#3949ab)"></div><div class="x" style="left:54px;top:54px;width:140px;height:140px;display:flex;align-items:center;justify-content:center"><span class="mi" style="--i:url(ic/music_note.png);--s:56px;color:rgba(255,255,255,.88)"></span></div>
+        <div id="hTitle" class="x" style="left:14px;top:222px;width:220px;text-align:center;font-size:17px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Camino al mar</div>
+        <div id="hArtist" class="x" style="left:14px;top:250px;width:220px;text-align:center;font-size:13px;color:var(--m)">Artista de ejemplo</div>
+        <div id="hTime" class="x" style="left:14px;top:274px;width:220px;text-align:center;font-size:12px;color:var(--m);font-variant-numeric:tabular-nums">1:24 / 3:38</div>
+        <div class="x tap" id="hPrev" style="left:30px;top:304px;width:52px;height:52px;border-radius:26px;background:var(--btn);display:flex;align-items:center;justify-content:center"><span class="mi" style="--i:url(ic/skip_previous.png);--s:26px"></span></div>
+        <div class="x tap ac" id="hPlay" style="left:92px;top:298px;width:64px;height:64px;border-radius:32px;display:flex;align-items:center;justify-content:center"><span id="hPlayIc" class="mi" style="--i:url(ic/pause.png);--s:32px;color:#fff"></span></div>
+        <div class="x tap" id="hNext" style="left:166px;top:304px;width:52px;height:52px;border-radius:26px;background:var(--btn);display:flex;align-items:center;justify-content:center"><span class="mi" style="--i:url(ic/skip_next.png);--s:26px"></span></div>
+       </div>
+
+       <!-- Barra inferior -->
+       <div class="dock">
+        <div class="db" style="left:38px" data-t="Abre la radio FM de fábrica"><div class="c"><span class="mi" style="--i:url(ic/radio.png);--s:28px"></span></div><div class="l">Radio</div></div>
+        <div class="db" style="left:176px" data-t="Abre el Bluetooth de fábrica: llamadas y música"><div class="c"><span class="mi" style="--i:url(ic/bluetooth.png);--s:28px"></span></div><div class="l">Bluetooth</div></div>
+        <div class="db" style="left:314px" data-t="La cámara de reversa sigue funcionando igual"><div class="c"><span class="mi" style="--i:url(ic/photo_camera.png);--s:28px"></span></div><div class="l">Cámara</div></div>
+        <div class="db" style="left:452px" data-t="Abre el navegador de tu pantalla"><div class="c"><span class="mi" style="--i:url(ic/public.png);--s:28px"></span></div><div class="l">Navegador</div></div>
+        <div class="db" style="left:590px" data-t="Abre el explorador de archivos"><div class="c"><span class="mi" style="--i:url(ic/folder.png);--s:28px"></span></div><div class="l">Archivos</div></div>
+        <div class="db" style="left:728px" data-t="Ajustes de FordLauncher, ordenados por categorías"><div class="c"><span class="mi" style="--i:url(ic/settings.png);--s:28px"></span></div><div class="l">Ajustes</div></div>
+        <div class="db" style="left:866px" data-t="Todas las apps instaladas en tu pantalla"><div class="c"><span class="mi" style="--i:url(ic/apps.png);--s:28px"></span></div><div class="l">Apps</div></div>
+       </div>
+       <div class="toast" id="hToast"></div>
+      </div>
+     </div>
+    </div>
+   </div>
+
+   <div class="demo-ctl rv">
+    <span class="lbl"><span class="mi" style="--i:url(ic/palette.png);--s:18px"></span>Pruébala:</span>
+    <div class="seg" id="segTheme">
+     <button class="on" data-th="dark"><span class="mi" style="--i:url(ic/dark_mode.png);--s:16px"></span>Oscuro</button>
+     <button data-th="light"><span class="mi" style="--i:url(ic/light_mode.png);--s:16px"></span>Claro</button>
+    </div>
+    <div class="sw" id="sw"></div>
+    <input class="name-in" id="nameIn" maxlength="16" placeholder="Tu nombre" aria-label="Tu nombre para el saludo">
+   </div>
+   <p class="hint">Es una demostración interactiva: toca los botones de la pantalla, cambia el tema, el color y escribe tu nombre.</p>
+  </div>
+ </div>
+</section>
+
+<!-- ================= EL PROBLEMA ================= -->
+<section id="problema">
+ <div class="wrap">
+  <div class="center rv">
+   <span class="kicker">¿Te suena?</span>
+   <h2>La caja dice <em class="hl">Android 6</em>.<br>Por dentro corre Android 4.</h2>
+   <p class="sub">Miles de radios chinas muestran un número de versión falso. Por eso la Play Store da error, las apps no se instalan y la pantalla se queda en el pasado.</p>
+  </div>
+  <div class="pain">
+   <div class="rv"><code>Error del servidor</code><p>La Play Store ya no abre. Google dejó de dar soporte a esas versiones hace años.</p></div>
+   <div class="rv" style="--d:.08s"><code>Error de análisis</code><p>Bajas una app y no instala: casi todas piden un Android más nuevo que el que tienes de verdad.</p></div>
+   <div class="rv" style="--d:.16s"><code>Menú de 2012</code><p>Íconos brillantes, letras pequeñas y nada útil mientras manejas.</p></div>
+  </div>
+  <div class="fix rv"><span class="mi" style="--i:url(ic/restart_alt.png)"></span><p><b>FordLauncher está hecho justo para estas pantallas.</b> Funciona desde Android 4.1, se instala como una app normal y, si un día no te gusta, la quitas y tu pantalla queda exactamente como estaba.</p></div>
+ </div>
+</section>
+
+<!-- ================= NÚMEROS ================= -->
+<section>
+ <div class="wrap">
+  <div class="stats">
+   <div class="stat rv"><b>&lt;<span data-count="0.5" data-dec="1">0,5</span> MB</b><span>Lo que pesa. Más liviano que una foto de WhatsApp.</span></div>
+   <div class="stat rv" style="--d:.06s"><b><span data-count="4.1" data-dec="1">4,1</span>+</b><span>Versión mínima de Android. Revive pantallas que nadie más soporta.</span></div>
+   <div class="stat rv" style="--d:.12s"><b><span data-count="0">0</span></b><span>Anuncios, cuentas o rastreadores. Ninguno.</span></div>
+   <div class="stat rv" style="--d:.18s"><b><span data-count="100">100</span>%</b><span>Gratis y de código abierto (GPL-3.0).</span></div>
+  </div>
+ </div>
+</section>
+
+<!-- ================= ANTES / DESPUÉS ================= -->
+<section id="antes-despues">
+ <div class="wrap">
+  <div class="center rv">
+   <span class="kicker">Antes y después</span>
+   <h2>Desliza y <em class="hl">mira la diferencia.</em></h2>
+   <p class="sub">La misma pantalla, el mismo carro. Solo cambia la app de inicio.</p>
+  </div>
+  <div class="ba rv" id="ba">
+   <img src="img/menu-fabrica.webp" alt="Menú genérico de fábrica de una radio Android" loading="lazy" width="1536" height="900">
+   <img class="after" src="img/inicio-oscuro.webp" alt="Pantalla de inicio de FordLauncher" loading="lazy" width="1536" height="900">
+   <span class="tag t1">Menú de fábrica</span><span class="tag t2">FordLauncher</span>
+   <div class="bar"><div class="knob">⇆</div></div>
+   <input type="range" min="0" max="100" value="50" step="0.1" aria-label="Comparar antes y después">
+  </div>
+  <p class="hint">Ilustración del menú de fábrica típico. El de tu pantalla puede variar.</p>
+ </div>
+</section>
+
+<!-- ================= FUNCIONES ================= -->
+<section id="funciones">
+ <div class="wrap">
+  <div class="rv">
+   <span class="kicker">Todo en una pantalla</span>
+   <h2>Lo que necesitas al volante,<br><em class="hl">sin buscarlo.</em></h2>
+  </div>
+  <div class="feats">
+   <div class="feat big rv"><div class="ico"><span class="mi" style="--i:url(ic/add_photo_alternate.png);--s:26px"></span></div><h3>Tu carro, con tu foto</h3><p>Sube una foto de tu vehículo y FordLauncher <b>le quita el fondo automáticamente</b> y la ajusta al recuadro, con vista previa y hasta el reflejo del piso. Ponle nombre, año o lo que quieras.</p></div>
+   <div class="feat rv" style="--d:.05s"><div class="ico"><span class="mi" style="--i:url(ic/map.png);--s:26px"></span></div><h3>Mapa en vivo</h3><p>Tu ciudad con tu posición y rumbo (OpenStreetMap). Guarda lo que ya recorriste para verlo aunque te quedes sin señal.</p></div>
+   <div class="feat rv"><div class="ico"><span class="mi" style="--i:url(ic/navigation.png);--s:26px"></span></div><h3>Android Auto y CarPlay</h3><p>Un botón para cada uno. Abre el de tu pantalla o, si no trae, Android Auto por cable con Open Headunit.</p></div>
+   <div class="feat rv" style="--d:.05s"><div class="ico"><span class="mi" style="--i:url(ic/music_note.png);--s:26px"></span></div><h3>Música con carátula</h3><p>Título, artista, tiempo y carátula de lo que suena por <b>Bluetooth</b> o <b>Android Auto</b>, con controles grandes. Y el Bluetooth suena apenas le das play, sin abrir la app de fábrica.</p></div>
+   <div class="feat rv" style="--d:.1s"><div class="ico"><span class="mi" style="--i:url(ic/speed.png);--s:26px"></span></div><h3>Velocímetro GPS</h3><p>Tu velocidad real en grande, más reloj, fecha y un saludo con tu nombre.</p></div>
+   <div class="feat rv"><div class="ico"><span class="mi" style="--i:url(ic/wb_sunny.png);--s:26px"></span></div><h3>Clima de tu ciudad</h3><p>Temperatura y estado del tiempo donde estás, en °C o °F.</p></div>
+   <div class="feat rv" style="--d:.05s"><div class="ico"><span class="mi" style="--i:url(ic/photo_camera.png);--s:26px"></span></div><h3>Tu cámara de reversa intacta</h3><p>Radio, Bluetooth, cámara y archivos de fábrica siguen a un toque. Nada deja de funcionar.</p></div>
+   <div class="feat rv" style="--d:.1s"><div class="ico"><span class="mi" style="--i:url(ic/palette.png);--s:26px"></span></div><h3>Oscuro, claro o automático</h3><p>Cambia solo según la hora y elige entre 10 colores de acento.</p></div>
+   <div class="feat rv"><div class="ico"><span class="mi" style="--i:url(ic/system_update.png);--s:26px"></span></div><h3>Se actualiza sola</h3><p>Te avisa cuando hay versión nueva, con sus cambios. Si tu pantalla no puede bajarla, te muestra un QR para el celular.</p></div>
+   <div class="feat rv" style="--d:.05s"><div class="ico"><span class="mi" style="--i:url(ic/tune.png);--s:26px"></span></div><h3>Ajustes que se entienden</h3><p>Ordenados por categorías y con un asistente inicial: tu nombre, tu carro, tu color y listo.</p></div>
+   <div class="feat big rv" style="--d:.1s"><span class="badge">LIVIANO DE VERDAD</span><div class="ico"><span class="mi" style="--i:url(ic/code.png);--s:26px"></span></div><h3>Pensado para pantallas modestas</h3><p>Pesa menos de medio mega y está hecho en Java puro, sin librerías pesadas, para que corra bien en procesadores sencillos como los de las radios chinas. Todo el código es público en GitHub: cualquiera puede revisarlo, mejorarlo o adaptarlo.</p></div>
+  </div>
+ </div>
+</section>
+
+<!-- ================= ANDROID AUTO / CARPLAY ================= -->
+<section id="android-auto" style="background:linear-gradient(transparent,var(--bg2) 20%,var(--bg2) 80%,transparent)">
+ <div class="wrap">
+  <div class="center rv">
+   <span class="kicker">Conecta tu celular</span>
+   <h2>Waze, Maps y Spotify<br><em class="hl">en la pantalla grande.</em></h2>
+   <p class="sub">Tú eliges cómo conectar tu celular y FordLauncher lo respeta. No te impone ninguna app.</p>
+  </div>
+  <div class="conn">
+   <div class="cc aa rv">
+    <h3><span class="mi" style="--i:url(ic/android.png);--s:30px;color:var(--ok)"></span>Android Auto</h3>
+    <ul>
+     <li>Si tu pantalla ya trae Android Auto (ZLink, CarLink, TLink, AutoKit…), el botón lo abre directo.</li>
+     <li>Si no trae, funciona con <b>Open Headunit</b> por cable USB, sin comprar adaptador.</li>
+     <li>La canción y la carátula que suenan en Android Auto se ven en el inicio.</li>
+    </ul>
+    <p class="note">¿Va lento? Es el procesador de la pantalla: en Open Headunit baja a 480p, 30 FPS y H.264.</p>
+   </div>
+   <div class="cc rv" style="--d:.1s">
+    <h3><span class="mi" style="--i:url(ic/phone_iphone.png);--s:30px"></span>CarPlay</h3>
+    <ul>
+     <li>Si tu pantalla trae CarPlay, el botón lo abre directo.</li>
+     <li>Si usas un adaptador CarPlay USB para pantallas Android, abre su app.</li>
+     <li>Siempre a un toque desde el inicio, junto a Android Auto.</li>
+    </ul>
+    <p class="note">Sin el chip de Apple dentro de la pantalla, o sin adaptador, CarPlay no se puede activar por software. Te lo decimos claro.</p>
+   </div>
+  </div>
+ </div>
+</section>
+
+<!-- ================= TEMAS ================= -->
+<section>
+ <div class="wrap">
+  <div class="center rv">
+   <span class="kicker">Hazla tuya</span>
+   <h2>De día o de noche,<br><em class="hl">siempre se ve bien.</em></h2>
+  </div>
+  <div class="themes">
+   <figure class="rv"><img src="img/inicio-oscuro.webp" alt="FordLauncher en modo oscuro" loading="lazy" width="1536" height="900"><figcaption><span class="mi" style="--i:url(ic/dark_mode.png);--s:18px"></span>Modo oscuro: no encandila de noche</figcaption></figure>
+   <figure class="rv" style="--d:.1s"><img src="img/inicio-claro.webp" alt="FordLauncher en modo claro" loading="lazy" width="1536" height="900"><figcaption><span class="mi" style="--i:url(ic/light_mode.png);--s:18px"></span>Modo claro: se lee bien con sol</figcaption></figure>
+  </div>
+  <div class="palette rv" id="palette"></div>
+  <p class="hint">Los 10 colores de acento que trae FordLauncher.</p>
+ </div>
+</section>
+
+<!-- ================= INSTALAR ================= -->
+<section id="instalar">
+ <div class="wrap">
+  <div class="rv">
+   <span class="kicker">En 5 minutos</span>
+   <h2>Instálala con una<br><em class="hl">memoria USB.</em></h2>
+  </div>
+  <div class="steps">
+   <ol>
+    <li class="rv"><b>Descarga el APK</b><span>Desde esta página o desde GitHub. Pesa menos de medio mega.</span></li>
+    <li class="rv"><b>Pásalo a la pantalla</b><span>Cópialo a una memoria USB y, en la pantalla, muévelo a la <b>memoria interna</b> con el explorador de archivos. Muchas radios no instalan directo desde la USB.</span></li>
+    <li class="rv"><b>Permite la instalación</b><span>En la pantalla: Ajustes → Seguridad → <b>Orígenes desconocidos</b>.</span></li>
+    <li class="rv"><b>Instálala y hazla tu inicio</b><span>Toca el APK, instala, presiona el botón de Inicio y elige <b>FordLauncher → Siempre</b>.</span></li>
+    <li class="rv"><b>Sigue el asistente</b><span>Tu nombre, tu carro, tu color y tu foto. Listo para rodar.</span></li>
+   </ol>
+   <div class="qr-card rv">
+    <span class="kicker" style="margin:0">Desde el celular</span>
+    <h3 style="font-size:22px;margin-top:6px">Escanea y descarga</h3>
+    <div class="qr"><img src="img/qr-descarga.svg" alt="Código QR de descarga" width="172" height="172"></div>
+    <a class="btn btn-a" style="width:100%" href="https://github.com/lordnordic-debug/FordLauncher/releases/latest" data-dl><span class="mi" style="--i:url(ic/download.png);--s:20px"></span>Descargar APK</a>
+    <div class="tip"><b>¿Qué Android tiene de verdad tu pantalla?</b> Después de instalar, mira en FordLauncher → Ajustes → Acerca de el número de API. API 17 = Android 4.2, aunque la caja diga otra cosa.</div>
+   </div>
+  </div>
+ </div>
+</section>
+
+<!-- ================= COMPATIBILIDAD ================= -->
+<section>
+ <div class="wrap">
+  <div class="center rv">
+   <span class="kicker">Compatibilidad</span>
+   <h2>¿Funciona en <em class="hl">mi pantalla?</em></h2>
+   <p class="sub">Si es Android y horizontal, muy probablemente sí. Y si la pruebas en otra, cuéntanos para sumarla a la lista.</p>
+  </div>
+  <div class="compat">
+   <div class="rv"><small>Android</small><b>4.1 o superior</b></div>
+   <div class="rv" style="--d:.05s"><small>Pantalla</small><b>Cualquier resolución horizontal</b></div>
+   <div class="rv" style="--d:.1s"><small>Probada en</small><b>Android 4.2 · Autochips AC8227 · 1024×600</b></div>
+   <div class="rv" style="--d:.15s"><small>Requiere</small><b>Nada de root ni flasheo</b></div>
+  </div>
+  <div class="center rv" style="margin-top:26px"><a class="btn btn-g" href="https://github.com/lordnordic-debug/FordLauncher/issues/new/choose" target="_blank" rel="noopener"><span class="mi" style="--i:url(ic/bug_report.png);--s:20px"></span>Reportar mi pantalla o un problema</a></div>
+ </div>
+</section>
+
+<!-- ================= PREGUNTAS ================= -->
+<section id="preguntas">
+ <div class="wrap">
+  <div class="center rv"><span class="kicker">Preguntas frecuentes</span><h2>Lo que <em class="hl">todos preguntan.</em></h2></div>
+  <div class="faq">
+   <details class="rv"><summary>¿Es gratis de verdad?</summary><div class="ans">Sí. Sin anuncios, sin versión «pro», sin cuentas. Es código abierto bajo licencia GPL-3.0. Si quieres, puedes apoyar con un café, pero no es obligatorio.</div></details>
+   <details class="rv"><summary>¿Le hace algo al sistema de mi pantalla?</summary><div class="ans">No. Se instala como cualquier app y solo reemplaza la pantalla de inicio. No necesita root ni flashear nada. Si la desinstalas, tu pantalla vuelve a estar como antes.</div></details>
+   <details class="rv"><summary>Mi pantalla dice Android 6, ¿por qué no instalan las apps?</summary><div class="ans">Muchas pantallas muestran una versión falsa. Instala FordLauncher y mira en Ajustes → Acerca de el número de API: la API 17 equivale a Android 4.2.</div></details>
+   <details class="rv"><summary>¿Hace que vuelva a funcionar la Play Store?</summary><div class="ans">No, Google dejó de dar soporte a esas versiones. La solución es Android Auto: las apps (Maps, Waze, Spotify, WhatsApp) corren en tu celular y se ven en la pantalla.</div></details>
+   <details class="rv"><summary>El celular dice «Ninguna aplic. funciona con este accesorio USB»</summary><div class="ans">Lo causa la app de espejo de fábrica (EasyConnection/CarbitLink), que toma el USB primero. Ve a Ajustes → Aplicaciones → EasyConnection → Borrar datos, apaga y enciende el carro, y elige Open Headunit → Usar siempre. También está explicado dentro de FordLauncher → Ajustes → Conexión.</div></details>
+   <details class="rv"><summary>La música Bluetooth no suena hasta que abro la app de Bluetooth</summary><div class="ans">Pasa en muchas pantallas chinas. FordLauncher lo arregla: en pantallas Clinkway/Autochips cambia el audio a Bluetooth solo, apenas el celular empieza a sonar. En otras marcas, activa en Ajustes → Música → Audio Bluetooth la opción «Abrir la app de música Bluetooth al conectar el celular».</div></details>
+   <details class="rv"><summary>¿Puedo tener CarPlay sin adaptador?</summary><div class="ans">No. Apple exige un chip de autenticación dentro del equipo. Si tu pantalla trae CarPlay o usas un adaptador CarPlay USB, el botón CarPlay abre su app.</div></details>
+   <details class="rv"><summary>El mapa no carga</summary><div class="ans">Necesita internet, por ejemplo el punto de acceso de tu celular. En Android 4.x algunos servidores de mapas rechazan la conexión segura y FordLauncher prueba varios automáticamente. Deja presionado el mapa para ver el diagnóstico.</div></details>
+   <details class="rv"><summary>¿Qué datos recoge?</summary><div class="ans">Ninguno. No hay cuentas, anuncios ni analíticas. Tu ubicación se usa solo dentro de la pantalla para el mapa, el velocímetro y el clima. <a class="acc" href="https://github.com/lordnordic-debug/FordLauncher/blob/main/PRIVACY.md" target="_blank" rel="noopener">Lee la política de privacidad</a>.</div></details>
+  </div>
+ </div>
+</section>
+
+<!-- ================= APOYO ================= -->
+<section id="apoyar">
+ <div class="wrap">
+  <div class="center rv"><span class="kicker">Ayúdanos a crecer</span><h2>Gratis para ti.<br><em class="hl">Hecho con cariño.</em></h2><p class="sub">FordLauncher lo hace una sola persona en su tiempo libre. Cualquiera de estas cosas ayuda muchísimo:</p></div>
+  <div class="support">
+   <div class="sup rv"><h3><span class="mi" style="--i:url(ic/star.png);--s:24px;color:#F5B800"></span>Dale una estrella</h3><p>Es gratis, toma dos segundos y ayuda a que más gente lo encuentre en GitHub.</p><a class="btn btn-g" href="https://github.com/lordnordic-debug/FordLauncher" target="_blank" rel="noopener">⭐ Estrella en GitHub <span data-stars-n></span></a></div>
+   <div class="sup rv" style="--d:.06s"><h3><span class="mi" style="--i:url(ic/volunteer_activism.png);--s:24px;color:var(--a)"></span>Invítame un café</h3><p>Con tarjeta o PayPal, sin crear cuenta. Ayuda a probar FordLauncher en más pantallas.</p><a class="btn btn-a" href="https://ko-fi.com/fordlauncher" target="_blank" rel="noopener">☕ Apoyar en Ko-fi</a></div>
+   <div class="sup rv" style="--d:.12s"><h3><span class="mi" style="--i:url(ic/favorite.png);--s:24px;color:#E8457C"></span>Compártelo</h3><p>¿Conoces a alguien con una pantalla china que no sirve para nada? Mándasela.</p><div class="share"><a class="btn btn-g btn-s" id="shWa" target="_blank" rel="noopener">WhatsApp</a><a class="btn btn-g btn-s" id="shFb" target="_blank" rel="noopener">Facebook</a><button class="btn btn-g btn-s" id="shCp">Copiar enlace</button></div></div>
+  </div>
+ </div>
+</section>
+
+<!-- ================= CIERRE ================= -->
+<section class="final">
+ <div class="wrap rv">
+  <img class="lg" src="img/logo-192.png" alt="FordLauncher">
+  <h2>Dale una segunda vida<br>a tu pantalla <em class="hl">hoy.</em></h2>
+  <p class="sub" style="margin:16px auto 0">Descárgala, pruébala y, si no te convence, la quitas en un minuto. No tienes nada que perder.</p>
+  <div class="cta">
+   <a class="btn btn-a btn-dl" href="https://github.com/lordnordic-debug/FordLauncher/releases/latest" data-dl><span class="mi" style="--i:url(ic/download.png);--s:24px"></span><span class="tx">Descargar FordLauncher<span class="dl-meta" data-dlmeta>APK · menos de 0,5 MB</span></span></a>
+   <a class="btn btn-g" href="https://github.com/lordnordic-debug/FordLauncher" target="_blank" rel="noopener"><span class="mi" style="--i:url(ic/code.png);--s:20px"></span>Ver el código</a>
+  </div>
+ </div>
+</section>
+</main>
+
+<footer>
+ <div class="wrap">
+  <div class="row">
+   <a class="brand" href="#"><img src="img/logo-192.png" alt="">FordLauncher</a>
+   <nav>
+    <a href="https://github.com/lordnordic-debug/FordLauncher" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/lordnordic-debug/FordLauncher/releases" target="_blank" rel="noopener">Versiones</a>
+    <a href="https://github.com/lordnordic-debug/FordLauncher/issues" target="_blank" rel="noopener">Reportar un problema</a>
+    <a href="https://github.com/lordnordic-debug/FordLauncher/blob/main/PRIVACY.md" target="_blank" rel="noopener">Privacidad</a>
+    <a href="https://ko-fi.com/fordlauncher" target="_blank" rel="noopener">Ko-fi</a>
+   </nav>
+  </div>
+  <p style="margin-top:22px">Hecho en Colombia 🇨🇴 · Licencia GPL-3.0</p>
+  <p class="legal">FordLauncher es un proyecto independiente, gratuito y sin fines de lucro. No está afiliado a Google, Apple ni a ningún fabricante de vehículos o de pantallas. Android Auto es marca de Google LLC y CarPlay es marca de Apple Inc. Las pantallas de esta página son ilustraciones de la interfaz. No manipules la pantalla mientras conduces.</p>
+ </div>
+</footer>
+
+
+<div class="iab-bar" id="iabBar">Estás en el navegador de <span data-iabname>Facebook</span>: para descargar, ábrela en tu navegador.<button id="iabBarBtn">¿Cómo?</button></div>
+<div class="iab" id="iab" role="dialog" aria-modal="true" aria-labelledby="iabT">
+ <div class="iab-card">
+  <h3 id="iabT">Ábrela en tu navegador para descargar</h3>
+  <p>El navegador de <b data-iabname>Facebook</b> bloquea la descarga de apps (APK). Es un segundo:</p>
+  <ol>
+   <li><b class="n">1</b><span>Toca <span class="dots">⋯</span> o <span class="dots">⋮</span> arriba a la derecha.</span></li>
+   <li><b class="n">2</b><span>Elige <b>«Abrir en navegador»</b> o <b>«Abrir en Chrome»</b>.</span></li>
+   <li><b class="n">3</b><span>Toca <b>Descargar</b> otra vez. Si Chrome avisa, elige <b>«Descargar de todos modos»</b>.</span></li>
+  </ol>
+  <div class="row">
+   <a class="btn btn-a" id="iabChrome" href="#">Abrir en Chrome</a>
+   <button class="btn btn-g" id="iabCopy">Copiar enlace</button>
+  </div>
+  <p style="margin-top:14px;font-size:13px">Recuerda: FordLauncher es para la <b>pantalla del carro</b>, no para el celular. Descárgala y pásala a una memoria USB.</p>
+  <button class="skip" id="iabSkip">Intentar descargar aquí de todos modos</button>
+ </div>
+</div>
+<div class="fab" id="fab"><a class="btn btn-a" href="https://github.com/lordnordic-debug/FordLauncher/releases/latest" data-dl><span class="mi" style="--i:url(ic/download.png);--s:20px"></span>Descargar gratis</a></div>
+
+<script>
+(function(){
+var REPO='lordnordic-debug/FordLauncher', SITE='https://lordnordic-debug.github.io/FordLauncher/';
+var $=function(s,r){return (r||document).querySelector(s)}, $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---- Barra superior y botón flotante ---- */
+var hdr=$('header'), fab=$('#fab');
+var dlSeen=0;function onScroll(){var y=window.scrollY;hdr.classList.toggle('sc',y>20);fab.classList.toggle('on',y>500&&!dlSeen)}
+if('IntersectionObserver' in window){var dio=new IntersectionObserver(function(es){es.forEach(function(e){dlSeen+=e.isIntersecting?1:(e.target._v?-1:0);e.target._v=e.isIntersecting});dlSeen=Math.max(0,dlSeen);onScroll()});document.querySelectorAll('main .btn-dl,.qr-card .btn-a').forEach(function(b){dio.observe(b)})}
+addEventListener('scroll',onScroll,{passive:true});onScroll();
+
+/* ---- Aparición al bajar y contadores ---- */
+function countUp(el){var to=parseFloat(el.dataset.count),dec=+(el.dataset.dec||0),t0=null,D=1400;
+ function f(t){if(!t0)t0=t;var p=Math.min(1,(t-t0)/D),e=1-Math.pow(1-p,3);el.textContent=(to*e).toFixed(dec).replace('.',',');if(p<1)requestAnimationFrame(f)}
+ if(reduce){el.textContent=to.toFixed(dec).replace('.',',');return}requestAnimationFrame(f)}
+if('IntersectionObserver' in window){
+ var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');$$('[data-count]',e.target).forEach(countUp);io.unobserve(e.target)}})},{threshold:.12,rootMargin:'0px 0px -40px 0px'});
+ $$('.rv').forEach(function(el){io.observe(el)});
+}else{$$('.rv').forEach(function(el){el.classList.add('in')})}
+
+/* ---- Pantalla de demostración ---- */
+var hu=$('#hu'), screen=$('#screen'), unit=$('#unit');
+function fit(){var w=screen.clientWidth,s=w/1024;hu.style.transform='scale('+s+')';screen.style.height=(600*s)+'px'}
+addEventListener('resize',fit);fit();
+setTimeout(function(){unit.classList.add('on')},120);
+if(!reduce&&matchMedia('(hover:hover)').matches){
+ var stage=$('.stage');
+ stage.addEventListener('mousemove',function(e){if(!unit.classList.contains('on'))return;var r=stage.getBoundingClientRect(),x=(e.clientX-r.left)/r.width-.5,y=(e.clientY-r.top)/r.height-.5;unit.style.transition='transform .2s';unit.style.transform='rotateY('+(x*5)+'deg) rotateX('+(-y*4)+'deg)'});
+ stage.addEventListener('mouseleave',function(){unit.style.transition='transform .8s';unit.style.transform=''});
+}
+var DAYS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'],MON=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+var userName='';
+function greetWord(h){return h<12?'Buenos días':h<19?'Buenas tardes':'Buenas noches'}
+function tick(){var d=new Date(),h=d.getHours(),m=d.getMinutes(),h12=h%12||12;
+ $('#hClock').textContent=h12+':'+(m<10?'0':'')+m+' '+(h<12?'a.m.':'p.m.');
+ $('#hDate').textContent=DAYS[d.getDay()]+', '+d.getDate()+' de '+MON[d.getMonth()];
+ $('#hGreet').textContent=greetWord(h)+(userName?', '+userName:'');}
+tick();setInterval(tick,10000);
+
+/* Velocidad */
+var spd=48,target=52;
+setInterval(function(){if(Math.random()<.18)target=Math.max(0,Math.min(92,target+(Math.random()*40-18)));spd+=(target-spd)*.18;var v=Math.round(spd);$('#hSpeed').textContent=v;$('#hSpeedBar').style.width=Math.min(100,v/1.2)+'%'},400);
+
+/* Música */
+var SONGS=[['Camino al mar','Artista de ejemplo',218,'linear-gradient(135deg,#ff8a3d,#c2185b 55%,#3949ab)','ANDROID AUTO'],['Atardecer en la 9','Banda de ejemplo',196,'linear-gradient(135deg,#14b8b0,#2f7cf6 60%,#8e5cf7)','BLUETOOTH'],['Kilómetro 42','Grupo de ejemplo',241,'linear-gradient(135deg,#f5b800,#ff7a1a 55%,#e3262f)','ANDROID AUTO']];
+var si=0,pos=84,playing=true,C=2*Math.PI*82;
+function fmt(s){s=Math.floor(s);return Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60}
+function song(i){si=(i+SONGS.length)%SONGS.length;var s=SONGS[si];$('#hTitle').textContent=s[0];$('#hArtist').textContent=s[1];$('#hArt').style.background=s[3];$('#hSrc').textContent=s[4];pos=0;draw()}
+function draw(){var s=SONGS[si];$('#hTime').textContent=fmt(pos)+'  /  '+fmt(s[2]);$('#hRing').setAttribute('stroke-dasharray',(C*pos/s[2]).toFixed(1)+' 600')}
+function setPlay(p){playing=p;$('#hPlayIc').style.setProperty('--i','url(ic/'+(p?'pause':'play_arrow')+'.png)');$('#hArt').classList.toggle('paused',!p);$('#hEq').classList.toggle('paused',!p)}
+setInterval(function(){if(!playing)return;pos+=1;if(pos>=SONGS[si][2])song(si+1);draw()},1000);
+draw();
+$('#hPlay').addEventListener('click',function(){setPlay(!playing)});
+$('#hNext').addEventListener('click',function(){song(si+1);setPlay(true)});
+$('#hPrev').addEventListener('click',function(){if(pos>3){pos=0;draw()}else song(si-1);setPlay(true)});
+
+/* Mensajes al tocar */
+var toast=$('#hToast'),tt;
+$$('[data-t]',hu).forEach(function(el){el.addEventListener('click',function(){toast.textContent=el.dataset.t;toast.classList.add('on');clearTimeout(tt);tt=setTimeout(function(){toast.classList.remove('on')},2600)})});
+
+/* Tema, color y nombre */
+var ACC=[['FordLauncher','#FE3211'],['Rojo','#E3262F'],['Naranja','#FF7A1A'],['Amarillo','#F5B800'],['Verde','#2DBE6C'],['Turquesa','#14B8B0'],['Azul','#2F7CF6'],['Morado','#8E5CF7'],['Rosa','#E8457C'],['Plata','#9AA3AF']];
+var sw=$('#sw'),pal=$('#palette');
+ACC.forEach(function(a,i){var b=document.createElement('button');b.style.setProperty('--c',a[1]);b.title=a[0];b.setAttribute('aria-label','Color '+a[0]);if(!i)b.className='on';
+ b.addEventListener('click',function(){$$('button',sw).forEach(function(x){x.classList.remove('on')});b.classList.add('on');hu.style.setProperty('--hua',a[1])});sw.appendChild(b);
+ var s=document.createElement('span');s.style.setProperty('--c',a[1]);s.title=a[0];pal.appendChild(s)});
+$$('#segTheme button').forEach(function(b){b.addEventListener('click',function(){$$('#segTheme button').forEach(function(x){x.classList.remove('on')});b.classList.add('on');hu.className='hu '+b.dataset.th})});
+$('#nameIn').addEventListener('input',function(e){userName=e.target.value.trim().replace(/[<>]/g,'');tick()});
+
+/* ---- Antes / después ---- */
+var ba=$('#ba'),rng=$('input',ba);
+function setP(v){ba.style.setProperty('--p',v+'%');rng.value=v}
+rng.addEventListener('input',function(){setP(rng.value)});
+if('IntersectionObserver' in window&&!reduce){var done=false;new IntersectionObserver(function(es,o){es.forEach(function(e){if(e.isIntersecting&&!done){done=true;o.disconnect();var t0=null;
+ (function f(t){if(!t0)t0=t;var p=Math.min(1,(t-t0)/2200),v=50+42*Math.sin(p*Math.PI*1.5)*(1-p*.6);setP(p<1?v:50);if(p<1)requestAnimationFrame(f)})(performance.now())}})},{threshold:.5}).observe(ba)}
+
+/* ---- Compartir ---- */
+var msg='Mira esta app gratis para revivir la pantalla Android del carro: '+SITE;
+$('#shWa').href='https://wa.me/?text='+encodeURIComponent(msg);
+$('#shFb').href='https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(SITE);
+$('#shCp').addEventListener('click',function(){var b=this;function ok(){b.textContent='¡Copiado!';setTimeout(function(){b.textContent='Copiar enlace'},1800)}
+ if(navigator.clipboard)navigator.clipboard.writeText(SITE).then(ok,ok);else{var t=document.createElement('textarea');t.value=SITE;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(e){}t.remove();ok()}});
+
+
+/* ---- Navegadores internos (Facebook, Instagram, Messenger, TikTok…) ---- */
+(function(){
+ var ua=navigator.userAgent||'',m=ua.match(/FBAN|FBAV|FB_IAB|FBIOS|Instagram|Messenger|MessengerLite|musical_ly|BytedanceWebview|TikTok|Snapchat|Line\/|Twitter/i);
+ if(!m&&!/[?&]iab=1/.test(location.search))return;
+ var name=!m?'esta app':/Instagram/i.test(m[0])?'Instagram':/Messenger/i.test(m[0])?'Messenger':/musical_ly|Bytedance|TikTok/i.test(m[0])?'TikTok':/Snapchat/i.test(m[0])?'Snapchat':/Line/i.test(m[0])?'LINE':/Twitter/i.test(m[0])?'X':'Facebook';
+ $$('[data-iabname]').forEach(function(e){e.textContent=name});
+ var box=$('#iab'),bar=$('#iabBar'),pending=null,android=/Android/i.test(ua);
+ bar.classList.add('on');document.body.classList.add('has-iab');
+ var url=location.href.split('#')[0];
+ var chrome=$('#iabChrome');
+ if(android){chrome.href='intent://'+url.replace(/^https?:\/\//,'')+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(url)+';end'}
+ else{chrome.style.display='none'}
+ function open(){box.classList.add('on')}
+ function close(){box.classList.remove('on')}
+ $('#iabBarBtn').addEventListener('click',open);
+ box.addEventListener('click',function(e){if(e.target===box)close()});
+ $('#iabCopy').addEventListener('click',function(){var b=this;function ok(){b.textContent='¡Copiado! Pégalo en Chrome';setTimeout(function(){b.textContent='Copiar enlace'},2500)}
+  if(navigator.clipboard)navigator.clipboard.writeText(url).then(ok,ok);else{var t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(e){}t.remove();ok()}});
+ $('#iabSkip').addEventListener('click',function(){close();if(pending)location.href=pending});
+ $$('[data-dl]').forEach(function(a){a.addEventListener('click',function(e){e.preventDefault();pending=a.href;open()})});
+})();
+/* ---- Datos en vivo desde GitHub ---- */
+function j(u){return fetch(u,{headers:{Accept:'application/vnd.github+json'}}).then(function(r){if(!r.ok)throw r.status;return r.json()})}
+j('https://api.github.com/repos/'+REPO+'/releases/latest').then(function(r){
+ var apk=(r.assets||[]).filter(function(a){return /\.apk$/i.test(a.name)})[0];if(!apk)return;
+ var mb=(apk.size/1048576).toFixed(2).replace('.',','),v=(r.tag_name||'').replace(/^v/i,'');
+ $$('[data-dl]').forEach(function(a){a.href=apk.browser_download_url});
+ $$('[data-dlmeta]').forEach(function(s){s.textContent='v'+v+' · APK · '+mb+' MB'});
+}).catch(function(){});
+j('https://api.github.com/repos/'+REPO).then(function(r){var n=r.stargazers_count||0;if(n>0){$$('[data-stars]').forEach(function(s){s.textContent=n});$$('[data-stars-n]').forEach(function(s){s.textContent='· '+n})}}).catch(function(){});
+})();
+</script>
+</body>
+</html>

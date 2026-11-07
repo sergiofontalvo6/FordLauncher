@@ -1,0 +1,1 @@
+Corrige play después de pausar con el audio automático. Cuando el celular empieza a sonar y la fuente no es Bluetooth, FordLauncher abre «Audio Bluetooth» un instante y vuelve a donde estabas.

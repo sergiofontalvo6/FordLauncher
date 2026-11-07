@@ -1,0 +1,1 @@
+Fixes play after pause with automatic audio. When the phone starts playing and the source isn't Bluetooth, FordLauncher briefly opens the factory Bluetooth audio screen and returns to where you were.

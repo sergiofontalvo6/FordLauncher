@@ -1,0 +1,1 @@
+Bluetooth music from the phone now plays without opening the factory app (automatic on Clinkway/Autochips units; experimental option for other brands). The home play button also switches audio to Bluetooth. New Bluetooth diagnostics.

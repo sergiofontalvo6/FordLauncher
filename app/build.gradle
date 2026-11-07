@@ -1,0 +1,104 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Firma de release: se toma de variables de entorno (GitHub Actions). Sin ellas, el APK de release
+// queda sin firmar (así lo necesita F-Droid, que firma con su propia clave).
+def ksPath = System.getenv('FORDLAUNCHER_KEYSTORE')
+
+android {
+    namespace 'com.fordlauncher.launcher'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.fordlauncher.launcher'
+        // Android 4.1+: el objetivo del proyecto es revivir pantallas de carro antiguas.
+        minSdk 16
+        // 28 a propósito: mantiene el comportamiento probado en pantallas viejas y nuevas.
+        targetSdk 28
+        versionCode 32
+        versionName '2.9.3'
+    }
+
+    signingConfigs {
+        if (ksPath) {
+            release {
+                storeFile file(ksPath)
+                storePassword System.getenv('FORDLAUNCHER_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('FORDLAUNCHER_KEY_ALIAS')
+                keyPassword System.getenv('FORDLAUNCHER_KEY_PASSWORD')
+                enableV1Signing true   // Android 4.x solo entiende la firma v1
+                enableV2Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (ksPath) signingConfig signingConfigs.release
+        }
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    // F-Droid: sin el bloque binario de metadatos de dependencias.
+    dependenciesInfo {
+        includeInApk false
+        includeInBundle false
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            outputFileName = "FordLauncher-${variant.versionName}.apk"
+        }
+    }
+}
+
+// API oculta de Android 4.0–4.3 (IRemoteControlDisplay) para leer la pista en reproducción.
+// 1) El stub (src/hiddenapi) se compila solo como referencia: NO entra al APK; en el equipo se usa la clase real.
+// 2) RcDisplay (src/legacy), la única clase que la extiende, se compila contra ese stub y se empaqueta en un jar
+//    que sí entra al APK. El resto del código la carga por reflexión y nunca ve la API oculta.
+def androidJar = files({ android.bootClasspath })
+def stubsDir = layout.buildDirectory.dir('intermediates/hiddenapi/stubs')
+def legacyDir = layout.buildDirectory.dir('intermediates/hiddenapi/legacy')
+
+def compileStubs = tasks.register('compileHiddenApiStubs', JavaCompile) {
+    source = fileTree('src/hiddenapi/java')
+    classpath = androidJar
+    destinationDirectory = stubsDir
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
+    options.compilerArgs += ['-Xlint:-options']
+}
+def compileLegacy = tasks.register('compileLegacyRc', JavaCompile) {
+    dependsOn compileStubs
+    source = files('src/legacy/java', 'src/main/java/com/fordlauncher/launcher/RcCallback.java')
+    classpath = androidJar + files(stubsDir)
+    destinationDirectory = legacyDir
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
+    options.compilerArgs += ['-Xlint:-options']
+}
+def legacyJar = tasks.register('legacyRcJar', Jar) {
+    from(compileLegacy) { exclude 'com/fordlauncher/launcher/RcCallback*' }
+    archiveFileName = 'fordlauncher-legacy-rc.jar'
+    destinationDirectory = layout.buildDirectory.dir('intermediates/hiddenapi')
+}
+tasks.named('preBuild') { dependsOn legacyJar }
+
+dependencies {
+    implementation files(layout.buildDirectory.file('intermediates/hiddenapi/fordlauncher-legacy-rc.jar')).builtBy(legacyJar)
+}

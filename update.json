@@ -1,0 +1,6 @@
+{
+  "version": "2.9.2",
+  "notes": "## FordLauncher 2.9.2 — Avisos de actualización confiables y tabla de compatibilidad\n\n### Corregido\n- **Avisos de actualización:** en pantallas con Android 4.x, FordLauncher a veces decía «Tienes la última versión» aunque hubiera una nueva, porque leía una copia atrasada. Ahora consulta todas las fuentes y se queda con la versión más nueva. «Buscar actualizaciones» muestra qué respondió cada fuente.\n- **Audio Bluetooth desde la radio:** si venías de la radio y le dabas play en el celular, el sonido no pasaba a Bluetooth. Ahora sí: se abre «Audio Bluetooth» un instante y vuelve a donde estabas. No lo hace durante una llamada.\n\n### Novedades\n- **Compatibilidad** (Ajustes → Sistema, o tocando «Android de la pantalla» en Acerca de): una lista de cada función, desde qué versión de Android o marca de pantalla sirve, y cómo está en tu pantalla, con qué falta activar. También muestra el Android real cuando la pantalla dice otro.\n",
+  "url": "https://github.com/lordnordic-debug/FordLauncher/releases/tag/v2.9.2",
+  "apk": "https://github.com/lordnordic-debug/FordLauncher/releases/download/v2.9.2/FordLauncher-2.9.2.apk"
+}

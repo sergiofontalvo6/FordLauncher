@@ -1,0 +1,1 @@
+Avisos de actualización confiables en Android 4.x. El audio Bluetooth también se activa cuando vienes de la radio. Nueva tabla de compatibilidad por versión de Android en Ajustes → Sistema.

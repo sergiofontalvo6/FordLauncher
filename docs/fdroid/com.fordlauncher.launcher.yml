@@ -1,0 +1,33 @@
+# Plantilla para solicitar la inclusión en F-Droid (merge request a gitlab.com/fdroid/fdroiddata,
+# archivo metadata/com.fordlauncher.launcher.yml). Revisar con los mantenedores de F-Droid.
+Categories:
+  - Navigation
+  - System
+License: GPL-3.0-only
+AuthorName: Andrés (lordnordic-debug)
+SourceCode: https://github.com/lordnordic-debug/FordLauncher
+IssueTracker: https://github.com/lordnordic-debug/FordLauncher/issues
+Changelog: https://github.com/lordnordic-debug/FordLauncher/releases
+
+AutoName: FordLauncher
+
+AntiFeatures:
+  NonFreeNet:
+    es: Usa servicios de mapas de Esri y BigDataCloud (nombre de la ciudad) como opción.
+    en-US: Optionally uses Esri map tiles and BigDataCloud (city name).
+
+RepoType: git
+Repo: https://github.com/lordnordic-debug/FordLauncher.git
+
+Builds:
+  - versionName: 2.8.0
+    versionCode: 28
+    commit: v2.8.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 2.8.0
+CurrentVersionCode: 28

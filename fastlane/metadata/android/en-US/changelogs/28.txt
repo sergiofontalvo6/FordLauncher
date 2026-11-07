@@ -1,0 +1,1 @@
+First public release: update notices from GitHub (with QR code), new About section with update check, GitHub star, donate and issue reporting.

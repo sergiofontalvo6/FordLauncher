@@ -1,0 +1,1 @@
+The factory Bluetooth audio screen no longer opens by itself at startup. Automatic Bluetooth switching is now experimental and off; tapping play on the home screen switches to Bluetooth. New step to review which app each button opens.

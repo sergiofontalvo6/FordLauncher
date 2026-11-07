@@ -1,0 +1,1 @@
+La música Bluetooth del celular suena sin abrir la app de fábrica (automático en pantallas Clinkway/Autochips; opción en prueba para otras marcas). El botón play del inicio también activa el audio Bluetooth. Nuevo diagnóstico Bluetooth.

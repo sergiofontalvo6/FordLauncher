@@ -1,0 +1,13 @@
+<p><b>FordLauncher</b> le da una nueva vida a la pantalla Android de tu carro: reemplaza el menú genérico de fábrica por una pantalla de inicio moderna, sin flashear nada y sin tocar el sistema.</p>
+<p>Está pensado para las radios chinas que dicen «Android 6 o superior» pero por dentro corren Android 4.x, donde ya no funciona la Play Store y casi ninguna app se instala. También funciona en pantallas modernas.</p>
+<p><b>Funciones</b></p>
+<ul>
+<li>Pantalla de inicio con tu vehículo (foto con el fondo quitado automáticamente), velocímetro por GPS, reloj y clima.</li>
+<li>Mapa en vivo de tu ciudad con tu posición.</li>
+<li>Botones de Android Auto y CarPlay: abre la app de proyección de tu pantalla o Open Headunit.</li>
+<li>Reproductor con carátula, título, artista y progreso de lo que suene por Bluetooth o Android Auto.</li>
+<li>Accesos a Radio, Bluetooth, Cámara, Navegador y Archivos de fábrica (la cámara de reversa sigue funcionando).</li>
+<li>Modo oscuro, claro o automático y 10 colores de acento.</li>
+<li>Avisos de actualización desde GitHub, con código QR para descargar desde el celular.</li>
+</ul>
+<p>Compatible desde Android 4.1. Gratis, sin anuncios y de código abierto (GPL-3.0).</p>

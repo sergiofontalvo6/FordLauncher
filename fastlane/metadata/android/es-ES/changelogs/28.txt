@@ -1,0 +1,1 @@
+Primera versión pública: avisos de actualización desde GitHub (con código QR), sección «Acerca de» con buscar actualizaciones, estrella en GitHub, donar y reportar problemas.

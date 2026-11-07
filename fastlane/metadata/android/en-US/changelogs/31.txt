@@ -1,0 +1,1 @@
+Reliable update notices on Android 4.x. Bluetooth audio now also switches when coming from the radio. New compatibility table by Android version in Settings → System.

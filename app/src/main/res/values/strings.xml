@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ford Launcher</string>
+    <string name="acc_desc">Permite que Ford Launcher muestre la carátula y la pista de Android Auto leyendo la notificación de Open Headunit. No lee nada más.</string>
+    <string name="acc_label">Carátula de Android Auto</string>
+</resources>

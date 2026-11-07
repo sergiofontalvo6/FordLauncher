@@ -1,0 +1,47 @@
+name: 🐞 Reportar un problema
+description: Algo no funciona en tu pantalla
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ¡Gracias por ayudar a mejorar FordLauncher! Cada pantalla es distinta, así que los detalles importan mucho.
+  - type: input
+    id: version
+    attributes:
+      label: Versión de FordLauncher
+      description: Engranaje → Acerca de → Versión
+      placeholder: "2.8.0"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android real de la pantalla
+      description: Engranaje → Acerca de → «Android de la pantalla» (incluye el número de API)
+      placeholder: "6.0.1 (API 17)"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Pantalla y vehículo
+      description: Marca/modelo de la pantalla (si lo sabes), chip y carro
+      placeholder: "Pantalla genérica AC8227 · Kia Picanto 2019"
+  - type: textarea
+    id: what
+    attributes:
+      label: ¿Qué pasó?
+      description: Qué hiciste, qué esperabas y qué ocurrió. Las fotos de la pantalla ayudan muchísimo.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options: [Instalación, Pantalla de inicio, Android Auto / CarPlay, Música / Bluetooth, Mapa, Clima, Ajustes, Otro]
+  - type: textarea
+    id: diag
+    attributes:
+      label: Diagnóstico (opcional)
+      description: Engranaje → Sistema → Exportar diagnóstico. Comprime la carpeta FordDiag y arrástrala aquí.

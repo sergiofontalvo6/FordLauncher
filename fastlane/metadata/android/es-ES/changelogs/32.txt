@@ -1,0 +1,1 @@
+«Audio Bluetooth» ya no se abre solo al encender. El cambio automático a Bluetooth queda en prueba y apagado; tocar play en el inicio pasa el sonido a Bluetooth. Nuevo paso para revisar qué app abre cada botón.
