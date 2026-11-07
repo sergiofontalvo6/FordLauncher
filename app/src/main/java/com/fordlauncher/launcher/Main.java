@@ -118,6 +118,8 @@ public class Main extends Activity {
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
     private boolean askedMediaPerm;
+    private com.fordlauncher.launcher.obd.ObdRepository obdRepo;
+    private FrameLayout workshopView;
     static final int SDK = android.os.Build.VERSION.SDK_INT;
     private PlayerArt playerArt;
     // estado de la pista
@@ -997,25 +999,37 @@ public class Main extends Activity {
         }
     }
 
-    /** Diagnóstico / OBD2 (placeholder por ahora, para enlazar con OBD2 más adelante). */
+    com.fordlauncher.launcher.obd.ObdRepository getObdRepo() {
+        if (obdRepo == null) obdRepo = new com.fordlauncher.launcher.obd.ObdRepository(this);
+        return obdRepo;
+    }
+
+    /** Taller LiteDash en overlay central (tema oscuro, sin tapar reloj/dock). */
     private void openObdDiag() {
-        String msg = "Vehículo: " + prefs.getString("car_name", "Mi vehículo") + (prefs.getString("car_tag", "").trim().length() > 0 ? " · " + prefs.getString("car_tag", "") : "")
-                + "\nPantalla: Android " + android.os.Build.VERSION.RELEASE + " (API " + SDK + ") · " + android.os.Build.MODEL
-                + "\nGPS: " + (lastFix > 0 ? "fijado" : "buscando") + " · Velocidad: " + (speedTv != null ? speedTv.getText().toString() : "--") + " km/h"
-                + "\n\nMúsica: " + (curTitle != null ? curTitle + " — " + (curArtist != null ? curArtist : "") : "Nada sonando") + " · Fuente: " + (curSource != null ? curSource : "-")
-                + "\n\nOBD2: próximamente. Conecta un adaptador ELM327 (USB/Bluetooth) y aquí verás datos del motor."
-                + "\nDiag (apps/Bluetooth): " + BtBridge.logText();
-        new AlertDialog.Builder(this, dlg())
-            .setTitle("Diagnóstico OBD2")
-            .setMessage(msg)
-            .setPositiveButton("Exportar diagnóstico", new DialogInterface.OnClickListener() {
-                public void onClick(DialogInterface d, int w) { runDiag(); }
-            })
-            .setNeutralButton("Reproductor", new DialogInterface.OnClickListener() {
-                public void onClick(DialogInterface d, int w) { showPlayerDiag(); }
-            })
-            .setNegativeButton("Cerrar", null)
-            .show();
+        closeObdDiag();
+        workshopView = new FrameLayout(this);
+        workshopView.setBackgroundColor(BG);
+        workshopView.setClickable(true);
+        DiagnosticoView workshop = new DiagnosticoView(this, s);
+        workshopView.addView(workshop.build(), new FrameLayout.LayoutParams(-1, -1));
+        TextView close = tv("✕ Inicio (Taller)", 14, Color.WHITE, true);
+        close.setGravity(Gravity.CENTER);
+        close.setBackground(round(RED, 14));
+        close.setPadding((int)(16*s),(int)(8*s),(int)(16*s),(int)(8*s));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2,-2);
+        lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
+        lp.rightMargin = (int)(12*s);
+        lp.bottomMargin = (int)(54*s);
+        close.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ closeObdDiag(); } });
+        workshopView.addView(close, lp);
+        place(board, workshopView, 0, 56, 1024, 492);
+        workshopView.bringToFront();
+        // Conectar con MAC por defecto si el usuario ya emparejó ELM327
+        try { getObdRepo().connect(null); } catch (Throwable ignored) {}
+    }
+
+    private void closeObdDiag() {
+        if (workshopView != null) { try { board.removeView(workshopView); } catch (Throwable ignored) {} workshopView = null; }
     }
 
     // ───────────────────────── helpers de UI ─────────────────────────
