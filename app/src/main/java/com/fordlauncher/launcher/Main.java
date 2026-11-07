@@ -1003,23 +1003,24 @@ public class Main extends Activity {
         if (obdRepo == null) obdRepo = new com.fordlauncher.launcher.obd.ObdRepository(this);
         return obdRepo;
     }
+    android.content.SharedPreferences getPrefs() { return prefs; }
 
     /** Taller LiteDash en overlay central (tema oscuro, sin tapar reloj/dock). */
     private void openObdDiag() {
-        closeObdDiag();
+        if (workshopView != null) { closeObdDiag(); return; }
         workshopView = new FrameLayout(this);
         workshopView.setBackgroundColor(BG);
         workshopView.setClickable(true);
         DiagnosticoView workshop = new DiagnosticoView(this, s);
         workshopView.addView(workshop.build(), new FrameLayout.LayoutParams(-1, -1));
-        TextView close = tv("✕ Inicio (Taller)", 14, Color.WHITE, true);
+        TextView close = tv("✕ Inicio", 12, Color.WHITE, true);
         close.setGravity(Gravity.CENTER);
-        close.setBackground(round(RED, 14));
-        close.setPadding((int)(16*s),(int)(8*s),(int)(16*s),(int)(8*s));
+        close.setBackground(round(RED, 12));
+        close.setPadding((int)(10*s),(int)(6*s),(int)(10*s),(int)(6*s));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2,-2);
-        lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        lp.rightMargin = (int)(12*s);
-        lp.bottomMargin = (int)(54*s);
+        lp.gravity = Gravity.TOP | Gravity.RIGHT;
+        lp.rightMargin = (int)(10*s);
+        lp.topMargin = (int)(8*s);
         close.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ closeObdDiag(); } });
         workshopView.addView(close, lp);
         place(board, workshopView, 0, 56, 1024, 492);
