@@ -84,11 +84,12 @@ public class Main extends Activity {
     static final String[][] SLOTS = {
         {"radio", "Radio", "radio|fm|收音", "radio|fm"},
         {"bt", "Bluetooth", "bluetooth|bt|teléfono|telefono|phone", "bluetooth|.bt|btphone|btmusic"},
+        {"music", "Música", "música|musica|music|spotify|deezer|poweramp|youtube|reproductor", "spotify|deezer|poweramp|youtube|music|vlc|playerpro"},
         {"cam", "Cámara", "cámara|camara|camera|avin|reversa|dvr", "avin|camera|dvr|backcar|reverse"},
         {"files", "Archivos", "archivo|explorador|gestor|file|files", "filemanager|fileexplorer|documentsui|file"},
         {"settings", "Ajustes", "", ""},
     };
-    static final String[] SLOT_ICONS = {"radio", "bluetooth", "photo_camera", "folder", "settings"};
+    static final String[] SLOT_ICONS = {"radio", "bluetooth", "music_note", "photo_camera", "folder", "settings"};
 
     private SharedPreferences prefs;
     private final Handler h = new Handler();
@@ -119,7 +120,7 @@ public class Main extends Activity {
     static final int SDK = android.os.Build.VERSION.SDK_INT;
     private PlayerArt playerArt;
     // estado de la pista
-    private String curTitle, curArtist, curSource;
+    private String curTitle, curArtist, curSource, curAlbum;
     private Bitmap curArt;
     private long durMs = -1, posBaseMs = 0, posBaseAt = 0;
     private boolean posKnown;
@@ -952,35 +953,37 @@ public class Main extends Activity {
     }
 
     private void buildDock() {
-        final String[] icons = {"radio", "bluetooth", "photo_camera", "public", "folder", "settings", "apps"};
-        final String[] names = {"Radio", "Bluetooth", "Cámara", "Navegador", "Archivos", "Ajustes", "Apps"};
-        for (int i = 0; i < 7; i++) {
+        final String[] icons = {"radio", "bluetooth", "music_note", "photo_camera", "public", "folder", "bug_report", "settings", "apps"};
+        final String[] names = {"Radio", "Bluetooth", "Música", "Cámara", "Navegador", "Archivos", "Diagnóstico", "Ajustes", "Apps"};
+        for (int i = 0; i < 9; i++) {
             final int idx = i;
             LinearLayout b = new LinearLayout(this);
             b.setOrientation(LinearLayout.VERTICAL);
             b.setGravity(Gravity.CENTER_HORIZONTAL);
-            b.addView(circleIcon(icons[i], 64, 28, CIRCLE), new LinearLayout.LayoutParams((int) (64 * s), (int) (64 * s)));
-            TextView l = tv(names[i], 13, SOFT, false);
+            b.addView(circleIcon(icons[i], 54, 24, CIRCLE), new LinearLayout.LayoutParams((int) (54 * s), (int) (54 * s)));
+            TextView l = tv(names[i], 12, SOFT, false);
             l.setGravity(Gravity.CENTER_HORIZONTAL);
-            l.setPadding(0, (int) (8 * s), 0, 0);
+            l.setPadding(0, (int) (6 * s), 0, 0);
             b.addView(l, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            place(board, b, 38 + 138 * i, 474, 120, 110);
+            place(board, b, 20 + 110 * i, 474, 100, 110);
             b.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
                     switch (idx) {
                         case 0: openSlot(0); break;
                         case 1: openSlot(1); break;
                         case 2: openSlot(2); break;
-                        case 3: openBrowser(); break;
-                        case 4: openSlot(3); break;
+                        case 3: openSlot(3); break;
+                        case 4: openBrowser(); break;
                         case 5: openSlot(4); break;
+                        case 6: openObdDiag(); break;
+                        case 7: openSlot(5); break;
                         default: openDrawer();
                     }
                 }
             });
             b.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View v) {
-                    int[] map = {0, 1, 2, -1, 3, 4, -2};
+                    int[] map = {0, 1, 2, 3, -1, 4, -2, 5, -2};
                     int m = map[idx];
                     if (m == -1) { pickFor("web", "Navegador"); return true; }
                     if (m < 0) return false;
@@ -989,6 +992,27 @@ public class Main extends Activity {
                 }
             });
         }
+    }
+
+    /** Diagnóstico / OBD2 (placeholder por ahora, para enlazar con OBD2 más adelante). */
+    private void openObdDiag() {
+        String msg = "Vehículo: " + prefs.getString("car_name", "Mi vehículo") + (prefs.getString("car_tag", "").trim().length() > 0 ? " · " + prefs.getString("car_tag", "") : "")
+                + "\nPantalla: Android " + android.os.Build.VERSION.RELEASE + " (API " + SDK + ") · " + android.os.Build.MODEL
+                + "\nGPS: " + (lastFix > 0 ? "fijado" : "buscando") + " · Velocidad: " + (speedTv != null ? speedTv.getText().toString() : "--") + " km/h"
+                + "\n\nMúsica: " + (curTitle != null ? curTitle + " — " + (curArtist != null ? curArtist : "") : "Nada sonando") + " · Fuente: " + (curSource != null ? curSource : "-")
+                + "\n\nOBD2: próximamente. Conecta un adaptador ELM327 (USB/Bluetooth) y aquí verás datos del motor."
+                + "\nDiag (apps/Bluetooth): " + BtBridge.logText();
+        new AlertDialog.Builder(this, dlg())
+            .setTitle("Diagnóstico OBD2")
+            .setMessage(msg)
+            .setPositiveButton("Exportar diagnóstico", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) { runDiag(); }
+            })
+            .setNeutralButton("Reproductor", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) { showPlayerDiag(); }
+            })
+            .setNegativeButton("Cerrar", null)
+            .show();
     }
 
     // ───────────────────────── helpers de UI ─────────────────────────
@@ -1138,8 +1162,9 @@ public class Main extends Activity {
             public void onClick(View v) {
                 int which = code == KeyEvent.KEYCODE_MEDIA_NEXT ? 1 : code == KeyEvent.KEYCODE_MEDIA_PREVIOUS ? -1 : 0;
                 boolean done = false;
-
-                if (mediaWatcher != null && "ms".equals(curOrigin)) {
+                boolean idle = (curTitle == null && curArtist == null);
+                if (idle && code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) { openSlot(2); return; }
+                if (mediaWatcher != null) {
                     try { done = mediaWatcher.command(which); } catch (Throwable ignored) { }
                 }
                 if (!done && !sendBtCommand(code)) sendMediaKey(code);
@@ -1210,7 +1235,7 @@ public class Main extends Activity {
         } else if (hasContent && !t.clear) curOrigin = t.origin;
         if (t.clear) {
             curOrigin = null;
-            curTitle = curArtist = curSource = null;
+            curTitle = curArtist = curSource = curAlbum = null;
             curArt = null;
             durMs = -1;
             posKnown = false;
@@ -1220,9 +1245,9 @@ public class Main extends Activity {
         }
         boolean newTrack = t.title != null && !t.title.equals(curTitle);
         if (newTrack) {
-            posBaseMs = 0;
+            posBaseMs = t.positionMs >= 0 ? t.positionMs : 0;
             posBaseAt = now;
-            posKnown = true;
+            posKnown = t.positionMs >= 0;
             durMs = -1;
             if (!t.artSet) curArt = null;
             // ¿La notificación de Open Headunit ya trae la carátula de esta canción?
@@ -1233,9 +1258,10 @@ public class Main extends Activity {
         }
         if (t.title != null) curTitle = t.title;
         if (t.artist != null) curArtist = t.artist;
+        if (t.album != null) curAlbum = t.album;
         if (t.source != null) curSource = t.source;
         if (t.durationMs > 0) durMs = t.durationMs;
-        if (t.artSet) curArt = t.art;
+        if (t.artSet && t.art != null) curArt = t.art;
         long pos = currentPos();
         if (t.positionMs >= 0) { pos = t.positionMs; posKnown = true; }
         if (t.playing != null) {
@@ -1316,7 +1342,7 @@ public class Main extends Activity {
         if (trackTv == null) return;
         if (curTitle == null && curArtist == null) {
             trackTv.setText("Nada sonando");
-            artistTv.setText("Radio, Bluetooth o USB");
+            artistTv.setText("Toca ▶ para abrir tu música");
             sourceTv.setText("");
             timePosTv.setText("");
             playerArt.setArt(null);
@@ -1325,7 +1351,10 @@ public class Main extends Activity {
             boolean aaOff = curSource != null && curSource.toLowerCase(ES).contains("headunit")
                     && ("Conectado".equalsIgnoreCase(curArtist) || "Connected".equalsIgnoreCase(curArtist));
             trackTv.setText(curTitle != null ? curTitle : (curSource != null ? curSource : ""));
-            artistTv.setText(aaOff ? "Activa «Pista actual de AA» en Open Headunit" : (curArtist != null ? curArtist : ""));
+            String sub = "";
+            if (curArtist != null) sub = curArtist;
+            if (curAlbum != null && curAlbum.trim().length() > 0) sub = sub.length() > 0 ? sub + " · " + curAlbum : curAlbum;
+            artistTv.setText(aaOff ? "Activa «Pista actual de AA» en Open Headunit" : sub);
             sourceTv.setText(curSource != null ? curSource.toUpperCase(ES) : "");
             playerArt.setArt(curArt);
             updateProgress();
@@ -1339,10 +1368,15 @@ public class Main extends Activity {
 
     private void updateProgress() {
         if (playerArt == null || (curTitle == null && curArtist == null)) return;
-        if (durMs > 0 && posKnown) {
+        if (posKnown) {
             long p = currentPos();
-            playerArt.setProgress(p / (float) durMs);
-            timePosTv.setText(fmt(p) + "  /  " + fmt(durMs));
+            if (durMs > 0) {
+                playerArt.setProgress(p / (float) durMs);
+                timePosTv.setText(fmt(p) + " / " + fmt(durMs));
+            } else {
+                playerArt.setProgress(-1);
+                timePosTv.setText(fmt(p));
+            }
         } else if (durMs > 0) {
             playerArt.setProgress(-1);
             timePosTv.setText(fmt(durMs));
@@ -1503,7 +1537,7 @@ public class Main extends Activity {
 
     // ── asistente: revisar qué app abre cada botón ──
 
-    static final String[][] REVIEW = {{"radio", "Radio"}, {"bt", "Bluetooth"}, {"btaudio", "Música Bluetooth"}, {"cam", "Cámara"}, {"files", "Archivos"}, {"aa", "Android Auto"}};
+    static final String[][] REVIEW = {{"radio", "Radio"}, {"bt", "Bluetooth"}, {"music", "Música"}, {"btaudio", "Música Bluetooth"}, {"cam", "Cámara"}, {"files", "Archivos"}, {"aa", "Android Auto"}};
 
     /** Qué app abre cada botón en esta pantalla: la elegida o la que Ford Launcher detectó. */
     private String shortcutLabel(String key) {
@@ -2167,10 +2201,11 @@ public class Main extends Activity {
 
     private void catApps(LinearLayout body) {
         LinearLayout c = section(body, "Accesos de la barra inferior");
-        String[][] items = {{"radio", "Radio"}, {"bt", "Bluetooth"}, {"cam", "Cámara"}, {"web", "Navegador"}, {"files", "Archivos"}};
+        String[][] items = {{"radio", "Radio"}, {"bt", "Bluetooth"}, {"music", "Música"}, {"cam", "Cámara"}, {"web", "Navegador"}, {"files", "Archivos"}};
         for (final String[] it : items) {
             row(c, it[1], null, "web".equals(it[0]) ? appLabel(it[0], "Automático") : shortcutLabel(it[0]), new Runnable() { public void run() { pickFor(it[0], it[1]); } });
         }
+        row(c, "Diagnóstico", "OBD2 (por ahora muestra resumen)", "OBD2 próximo", new Runnable() { public void run() { openObdDiag(); } });
         row(c, "Música Bluetooth", "La app que hace sonar el Bluetooth (se usa para pasar el sonido)", shortcutLabel("btaudio"), new Runnable() { public void run() { pickFor("btaudio", "Música Bluetooth"); } });
         row(c, "Revisar todos los botones", "Lista rápida de qué abre cada uno, como en el asistente", null, new Runnable() { public void run() {
             reviewShortcuts(new Runnable() { public void run() { if (settingsView != null) showSettings(4); } });
@@ -2178,7 +2213,7 @@ public class Main extends Activity {
         LinearLayout r = section(body, "Restablecer");
         row(r, "Restablecer accesos", "Vuelve a buscar las apps de fábrica automáticamente", null, new Runnable() { public void run() {
             SharedPreferences.Editor e = prefs.edit();
-            for (String k : new String[]{"radio", "bt", "cam", "files", "settings", "aa", "web", "carplay"}) e.remove(k);
+            for (String k : new String[]{"radio", "bt", "music", "cam", "files", "settings", "aa", "web", "carplay"}) e.remove(k);
             e.apply();
             toast("Accesos restablecidos");
             refreshStates();
