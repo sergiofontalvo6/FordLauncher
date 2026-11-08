@@ -987,7 +987,7 @@ public class Main extends Activity {
         bar.addView(row, new FrameLayout.LayoutParams(-1, -1));
 
         // a) Tacómetro RPM: etiqueta + valor grande + arco de color
-        LinearLayout rpm = teleSection(row, 1.0f, "RPM", null);
+        LinearLayout rpm = teleSection(row, 0.95f, "RPM", null);
         rpmText = tv("-- RPM", 22, TEXT, true);
         rpmText.setMaxLines(1);
         rpmText.setEllipsize(TextUtils.TruncateAt.END);
@@ -998,7 +998,7 @@ public class Main extends Activity {
         rpm.addView(rpmGauge, rgp);
 
         // b) Temperatura del motor
-        LinearLayout temp = teleSection(row, 1.0f, "MOTOR", "thermostat");
+        LinearLayout temp = teleSection(row, 0.95f, "MOTOR", "thermostat");
         tempText = tv("-- °C", 22, TEXT, true);
         tempText.setMaxLines(1);
         tempText.setEllipsize(TextUtils.TruncateAt.END);
@@ -1020,8 +1020,8 @@ public class Main extends Activity {
         cons.addView(consBar, cbp);
 
         // d) Control de cambio de aceite (tocable)
-        final LinearLayout oil = teleSection(row, 1.0f, "ACEITE", "water_drop");
-        oilText = tv("Aceite: —", 17, TEXT, true);
+        final LinearLayout oil = teleSection(row, 1.1f, "ACEITE", "water_drop");
+        oilText = tv("Aceite: —", 13, TEXT, true);
         oilText.setMaxLines(1);
         oilText.setEllipsize(TextUtils.TruncateAt.END);
         oil.addView(oilText, new LinearLayout.LayoutParams(-1, -2));
@@ -1098,6 +1098,7 @@ public class Main extends Activity {
         Float speed = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.SPEED) : null;
         Float fuelRate = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.FUEL_RATE) : null;
         Float consKmL = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.CONSUMPTION) : null;
+        Float maf = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.MAF) : null;
 
         // Odómetro propio: suma km recorridos con velocidad en el tiempo.
         // Resincronización al reconectar: nunca bajar del valor persistido.
@@ -1111,7 +1112,7 @@ public class Main extends Activity {
             float dtH = (nowMs - telemLastMs) / 3600000f;
             if (dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
             if (odoKmTotal - odoLastSavedKm > 0.5f) {
-                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).apply();
+                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).putInt("oil_current_odometer", (int) odoKmTotal).apply();
                 odoLastSavedKm = odoKmTotal;
             }
         }
@@ -1121,7 +1122,7 @@ public class Main extends Activity {
         rpmText.setText(rpm != null ? String.format(ES, "%.0f RPM", rpm) : "-- RPM");
 
         if (tempBar != null) {
-            tempBar.setFraction(coolant != null ? (coolant - 40f) / 85f : -1f);
+            tempBar.setFraction(coolant != null ? (coolant - 40f) / 80f : -1f);
             tempBar.setFillColor(coolant != null ? tempColor(coolant) : tempBar.fill);
         }
         tempText.setText(coolant != null ? String.format(ES, "%.0f °C", coolant) : "-- °C");
@@ -1129,7 +1130,16 @@ public class Main extends Activity {
 
         String consTxt = "-- L/h";
         float consFrac = -1f;
-        if (speed != null && speed >= 5f && consKmL != null && consKmL > 0f) {
+        boolean idleish = rpm != null && rpm > 400f && (speed == null || speed <= 2f);
+        if (idleish && maf != null && maf > 0f) {
+            float lph = (maf * 3600f) / (14.7f * 745f);
+            consTxt = String.format(ES, "%.1f", lph) + " L/h";
+            consFrac = lph / 20f;
+        } else if (idleish && rpm != null && rpm > 400f) {
+            float estLph = (rpm * 1.6f * 0.5f * 60f * 0.85f * 1.2f) / (14.7f * 745f * 1000f);
+            consTxt = String.format(ES, "%.1f", estLph) + " L/h";
+            consFrac = estLph / 20f;
+        } else if (speed != null && speed >= 5f && consKmL != null && consKmL > 0f) {
             float l100 = 100f / consKmL;
             consTxt = String.format(ES, "%.1f L/100km", l100);
             consFrac = l100 / 30f;
@@ -1153,20 +1163,21 @@ public class Main extends Activity {
     /** Widget de aceite: sincroniza texto + barra + color (recálculo exacto). */
     private void updateOilWidgetUI() {
         if (oilText == null) return;
-        int currentOdo = prefInt("odo_km_total", 0);
-        int lastOdo = prefInt("oil_last_service_odometer", 0);
-        int interval = prefInt("oil_change_interval_km", 8000);
-        int kmUsados = Math.max(0, currentOdo - lastOdo);
-        int kmRestantes = Math.max(0, interval - kmUsados);
+        int actual = prefInt("oil_current_odometer", prefInt("odo_km_total", 0));
+        int cambio = prefInt("oil_last_service_odometer", 0);
+        int intervalo = prefInt("oil_change_interval_km", 8000);
+        int kmPasados = Math.max(0, actual - cambio);
+        int kmRestantes = Math.max(0, intervalo - kmPasados);
+        int porcentaje = intervalo > 0 ? Math.max(0, Math.min(100, (int) ((kmRestantes / (float) intervalo) * 100f))) : 0;
         long diasUso = -1;
         try {
             long epoch = prefs.getLong("oil_service_date_epoch", 0L);
             if (epoch > 0) diasUso = (System.currentTimeMillis() - epoch) / (1000L * 60L * 60L * 24L);
         } catch (Throwable ignored) {}
-        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes) + (diasUso > 0 ? " · Días: " + diasUso : ""));
+        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km pasados (%,d rest.)", kmPasados, kmRestantes) + (diasUso > 0 ? " · Días: " + diasUso : ""));
         if (oilBar != null) {
-            oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
-            oilBar.setFillColor(zoneColor(interval > 0 ? kmRestantes / (float) interval : 1f));
+            oilBar.setFraction(porcentaje / 100f);
+            oilBar.setFillColor(oilZoneColor(porcentaje));
         }
     }
 
@@ -1307,6 +1318,13 @@ public class Main extends Activity {
         return lerpColor(C_GREEN, C_ORANGE, Math.max(0f, Math.min(1f, (1f - frac) / 0.60f)));
     }
 
+    /** Aceite (vida restante 100%→0%): 100-50 verde, 50-20 verde→naranja, <20 naranja→rojo. */
+    private static int oilZoneColor(int porcentaje) {
+        if (porcentaje >= 50) return C_GREEN;
+        if (porcentaje >= 20) return lerpColor(C_GREEN, C_ORANGE, (50f - porcentaje) / 30f);
+        return lerpColor(C_ORANGE, C_RED_ZONE, Math.max(0f, Math.min(1f, (20f - porcentaje) / 20f)));
+    }
+
     private static int rpmColor(float rpm) {
         if (rpm <= 3500f) return C_GREEN;
         if (rpm < 5200f) return lerpColor(C_GREEN, C_ORANGE, (rpm - 3500f) / 1700f);
@@ -1314,9 +1332,10 @@ public class Main extends Activity {
     }
 
     private static int tempColor(float t) {
-        if (t < 92f) return C_GREEN;
-        if (t < 105f) return lerpColor(C_GREEN, C_ORANGE, (t - 92f) / 12f);
-        return C_RED_ZONE;
+        if (t < 75f) return 0xFF7FA8B8; // frío/calentamiento: azul tenue
+        if (t < 94f) return C_GREEN; // temperatura óptima
+        if (t < 105f) return lerpColor(C_GREEN, C_ORANGE, Math.min(1f, (t - 94f) / 11f)); // alerta
+        return C_RED_ZONE; // peligro
     }
 
     /** Barra del tacómetro: relleno de color según RPM (0-6500). */
