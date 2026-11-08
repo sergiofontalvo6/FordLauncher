@@ -115,6 +115,13 @@ public class Main extends Activity {
     private NowPlaying nowPlaying;
     private Boolean playingState;
     private TextView sourceTv, timePosTv, mapTagTv, cpSubTv;
+    // Barra inferior de telemetría (home)
+    private TextView rpmText, tempText, consText, oilText;
+    private RpmGauge rpmGauge;
+    private MiniBar tempBar, consBar, oilBar;
+    private long telemLastMs;
+    private float odoKmTotal = -1f;
+    private float odoLastSavedKm = -1f;
     private LiveMapView liveMap;
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
@@ -689,6 +696,7 @@ public class Main extends Activity {
         buildCarCard();
         buildAaCard();
         buildAudioCard();
+        buildTelemetryBar();
         buildDock();
 
         try { if (parked != null) parked.attach(root); } catch (Throwable ignored) {}
@@ -771,7 +779,7 @@ public class Main extends Activity {
     }
 
     private void buildCarCard() {
-        FrameLayout card = card(16, 64, 300, 380, CARD);
+        FrameLayout card = card(10, 64, 308, 372, CARD);
         carCardContainer = card;
         carTv = tv(prefs.getString("car_name", "Mi vehículo"), 20, TEXT, true);
         place(card, carTv, 20, 16, 260, 26);
@@ -822,7 +830,7 @@ public class Main extends Activity {
 
     private void buildAaCard() {
         FrameLayout card = new FrameLayout(this);
-        place(board, card, 328, 64, 420, 380);
+        place(board, card, 324, 64, 431, 372);
         // fondo decorativo mientras no hay GPS; encima, el mapa en vivo
         card.addView(new MapView(this, s, 20 * s), new FrameLayout.LayoutParams(-1, -1));
         liveMap = new LiveMapView(this, s, 20 * s);
@@ -851,30 +859,8 @@ public class Main extends Activity {
         tag.addView(mapTagTv);
         placeWrap(card, tag, 16, 16);
 
-        FrameLayout panel = new FrameLayout(this);
-        panel.setBackground(round((CARD & 0x00FFFFFF) | 0xEB000000, 16));
-        place(card, panel, 12, 284, 396, 84);
-
-        View aa = projButton("navigation", "Android Auto", RED, true);
-        aaBtnTv = (TextView) aa.getTag();
-        place(panel, aa, 10, 10, 184, 64);
-        View cp = projButton("phone_iphone", "CarPlay", BTN, false);
-        cpSubTv = (TextView) cp.getTag();
-        place(panel, cp, 202, 10, 184, 64);
-        aaSubTv = aaBtnTv;
-
-        aa.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openAndroidAuto(); }
-        });
-        aa.setOnLongClickListener(new View.OnLongClickListener() {
-            public boolean onLongClick(View v) { chooseConnection(null); return true; }
-        });
-        cp.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openCarPlay(); }
-        });
-        cp.setOnLongClickListener(new View.OnLongClickListener() {
-            public boolean onLongClick(View v) { pickFor("carplay", "CarPlay"); return true; }
-        });
+        // Sin panel flotante: el mapa a pantalla completa, los botones van en la barra inferior.
+        seedLastLocation();
         updateMapTag();
     }
 
@@ -885,6 +871,28 @@ public class Main extends Activity {
         b.setBackground(round(color, 14));
         b.setPadding((int) (12 * s), 0, (int) (8 * s), 0);
         ImageView pic = icon(ic, 26);
+        if (filled) pic.clearColorFilter();
+        b.addView(pic, new LinearLayout.LayoutParams((int) (26 * s), (int) (26 * s)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding((int) (10 * s), 0, 0, 0);
+        col.addView(tv(title, 15, filled ? Color.WHITE : TEXT, true));
+        TextView sub = tv("", 11, filled ? 0xD9FFFFFF : MUTED, false);
+        sub.setPadding(0, (int) (3 * s), 0, 0);
+        col.addView(sub);
+        b.addView(col, new LinearLayout.LayoutParams(-1, -2));
+        b.setTag(sub);
+        return b;
+    }
+
+    /** Igual que projButton pero con un drawable de res/drawable (icono oficial). */
+    private View projButtonRes(int resId, String title, int color, boolean filled) {
+        LinearLayout b = new LinearLayout(this);
+        b.setGravity(Gravity.CENTER_VERTICAL);
+        b.setBackground(round(color, 14));
+        b.setPadding((int) (12 * s), 0, (int) (8 * s), 0);
+        ImageView pic = new ImageView(this);
+        try { pic.setImageDrawable(getResources().getDrawable(resId)); } catch (Throwable t) { pic.setImageResource(resId); }
         if (filled) pic.clearColorFilter();
         b.addView(pic, new LinearLayout.LayoutParams((int) (26 * s), (int) (26 * s)));
         LinearLayout col = new LinearLayout(this);
@@ -931,7 +939,7 @@ public class Main extends Activity {
     }
 
     private void buildAudioCard() {
-        FrameLayout card = card(760, 64, 248, 380, CARD);
+        FrameLayout card = card(761, 64, 253, 372, CARD);
         placeWrap(card, tv("AUDIO", 11, MUTED, true), 18, 14);
         sourceTv = tv("", 11, RED, true);
         sourceTv.setGravity(Gravity.RIGHT);
@@ -961,6 +969,279 @@ public class Main extends Activity {
             public boolean onLongClick(View v) { showPlayerDiag(); return true; }
         });
         renderTrack();
+    }
+
+    // ── Barra inferior de telemetría (entre tarjetas y dock) ──
+
+    private void buildTelemetryBar() {
+        FrameLayout bar = new FrameLayout(this);
+        bar.setBackground(round(CARD, 16));
+        place(board, bar, 10, 442, 1004, 82);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding((int) (10 * s), (int) (8 * s), (int) (10 * s), (int) (8 * s));
+        bar.addView(row, new FrameLayout.LayoutParams(-1, -1));
+
+        // a) Tacómetro RPM: etiqueta + valor grande + arco de color
+        LinearLayout rpm = teleSection(row, 1.4f, "RPM", null);
+        rpmText = tv("-- RPM", 22, TEXT, true);
+        rpmText.setMaxLines(1);
+        rpmText.setEllipsize(TextUtils.TruncateAt.END);
+        rpm.addView(rpmText, new LinearLayout.LayoutParams(-1, -2));
+        rpmGauge = new RpmGauge();
+        LinearLayout.LayoutParams rgp = new LinearLayout.LayoutParams(-1, (int) (14 * s));
+        rgp.topMargin = (int) (4 * s);
+        rpm.addView(rpmGauge, rgp);
+
+        // b) Temperatura del motor
+        LinearLayout temp = teleSection(row, 1.0f, "MOTOR", "thermostat");
+        tempText = tv("-- °C", 22, TEXT, true);
+        tempText.setMaxLines(1);
+        tempText.setEllipsize(TextUtils.TruncateAt.END);
+        temp.addView(tempText, new LinearLayout.LayoutParams(-1, -2));
+        tempBar = new MiniBar();
+        LinearLayout.LayoutParams tbp = new LinearLayout.LayoutParams(-1, (int) (14 * s));
+        tbp.topMargin = (int) (4 * s);
+        temp.addView(tempBar, tbp);
+
+        // c) Consumo instantáneo
+        LinearLayout cons = teleSection(row, 1.1f, "CONSUMO", "speed");
+        consText = tv("-- L/h", 22, TEXT, true);
+        consText.setMaxLines(1);
+        consText.setEllipsize(TextUtils.TruncateAt.END);
+        cons.addView(consText, new LinearLayout.LayoutParams(-1, -2));
+        consBar = new MiniBar();
+        LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, (int) (14 * s));
+        cbp.topMargin = (int) (4 * s);
+        cons.addView(consBar, cbp);
+
+        // d) Control de cambio de aceite (tocable)
+        final LinearLayout oil = teleSection(row, 1.0f, "ACEITE", "water_drop");
+        oilText = tv("Aceite: —", 17, TEXT, true);
+        oilText.setMaxLines(1);
+        oilText.setEllipsize(TextUtils.TruncateAt.END);
+        oil.addView(oilText, new LinearLayout.LayoutParams(-1, -2));
+        oilBar = new MiniBar();
+        LinearLayout.LayoutParams obp = new LinearLayout.LayoutParams(-1, (int) (14 * s));
+        obp.topMargin = (int) (4 * s);
+        oil.addView(oilBar, obp);
+        oil.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { oilDialog(); }
+        });
+
+        // e) Botón dividido Android Auto / CarPlay
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(0, -1, 2.0f);
+        plp.leftMargin = (int) (12 * s);
+        row.addView(pill, plp);
+        View aa = projButtonRes(R.drawable.android_auto, "Android Auto", RED, true);
+        aaBtnTv = (TextView) aa.getTag();
+        pill.addView(aa, new LinearLayout.LayoutParams(0, -1, 1f));
+        View sep = new View(this);
+        sep.setBackgroundColor(BTN);
+        pill.addView(sep, new LinearLayout.LayoutParams(Math.max(1, (int) s), -1));
+        View cp = projButtonRes(R.drawable.carplay, "CarPlay", BTN, false);
+        cpSubTv = (TextView) cp.getTag();
+        pill.addView(cp, new LinearLayout.LayoutParams(0, -1, 1f));
+        aaSubTv = aaBtnTv;
+
+        aa.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openAndroidAuto(); }
+        });
+        aa.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) { chooseConnection(null); return true; }
+        });
+        cp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openCarPlay(); }
+        });
+        cp.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) { pickFor("carplay", "CarPlay"); return true; }
+        });
+
+        updateTelemetryBar();
+    }
+
+    private LinearLayout teleSection(LinearLayout row, float weight, String label, String iconName) {
+        LinearLayout sec = new LinearLayout(this);
+        sec.setOrientation(LinearLayout.VERTICAL);
+        sec.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0, -1, weight);
+        if (row.getChildCount() > 0) slp.leftMargin = (int) (6 * s);
+        row.addView(sec, slp);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(0, 0, 0, (int) (3 * s));
+        if (iconName != null) {
+            ImageView ic = icon(iconName, 14);
+            ic.setAlpha(0.6f);
+            head.addView(ic, new LinearLayout.LayoutParams((int) (14 * s), (int) (14 * s)));
+        }
+        TextView lb = tv(label, 10, MUTED, true);
+        lb.setPadding((int) (5 * s), 0, 0, 0);
+        lb.setMaxLines(1);
+        lb.setEllipsize(TextUtils.TruncateAt.END);
+        head.addView(lb, new LinearLayout.LayoutParams(-1, -2));
+        sec.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        return sec;
+    }
+
+    private void updateTelemetryBar() {
+        if (rpmText == null) return;
+        java.util.Map<String, Float> v;
+        try { v = getObdRepo().getValues(); } catch (Throwable t) { v = null; }
+        Float rpm = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.RPM) : null;
+        Float coolant = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.COOLANT) : null;
+        Float speed = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.SPEED) : null;
+        Float fuelRate = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.FUEL_RATE) : null;
+        Float consKmL = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.CONSUMPTION) : null;
+
+        // Odómetro propio: suma km recorridos con velocidad en el tiempo.
+        long nowMs = System.currentTimeMillis();
+        if (odoKmTotal < 0f) { odoKmTotal = prefs.getFloat("odo_km_total", 0f); odoLastSavedKm = odoKmTotal; }
+        if (speed != null && speed > 0f && telemLastMs > 0) {
+            float dtH = (nowMs - telemLastMs) / 3600000f;
+            if (dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
+            if (odoKmTotal - odoLastSavedKm > 0.5f) {
+                prefs.edit().putFloat("odo_km_total", odoKmTotal).apply();
+                odoLastSavedKm = odoKmTotal;
+            }
+        }
+        telemLastMs = nowMs;
+
+        if (rpmGauge != null) rpmGauge.setValue(rpm != null ? rpm : -1f);
+        rpmText.setText(rpm != null ? String.format(ES, "%.0f RPM", rpm) : "-- RPM");
+
+        if (tempBar != null) tempBar.setFraction(coolant != null ? (coolant - 40f) / 85f : -1f);
+        tempText.setText(coolant != null ? String.format(ES, "%.0f °C", coolant) : "-- °C");
+        tempText.setTextColor(coolant != null && coolant >= 105f ? 0xFFF44336 : TEXT);
+
+        String consTxt = "-- L/h";
+        float consFrac = -1f;
+        if (speed != null && speed >= 5f && consKmL != null && consKmL > 0f) {
+            float l100 = 100f / consKmL;
+            consTxt = String.format(ES, "%.1f L/100km", l100);
+            consFrac = l100 / 30f;
+        } else if (fuelRate != null && fuelRate > 0f) {
+            consTxt = String.format(ES, "%.1f L/h", fuelRate);
+            consFrac = fuelRate / 20f;
+        } else if (speed != null && speed >= 5f && fuelRate != null) {
+            float l100 = fuelRate / speed * 100f;
+            consTxt = String.format(ES, "%.1f L/100km", l100);
+            consFrac = l100 / 30f;
+        }
+        consText.setText(consTxt);
+        if (consBar != null) consBar.setFraction(consFrac);
+
+        float interval = prefs.getFloat("oil_change_interval_km", 8000f);
+        float lastSvc = prefs.getFloat("oil_last_service_odometer", 0f);
+        float usedKm = Math.max(0f, odoKmTotal - lastSvc);
+        float remain = interval - usedKm;
+        oilText.setText(remain >= 0f ? "Aceite: " + String.format(ES, "%,.0f km", remain) : "¡Cambio de aceite!");
+        oilText.setTextColor(remain < 1000f ? 0xFFD29922 : TEXT);
+        if (oilBar != null) oilBar.setFraction(interval > 0f ? usedKm / interval : 0f);
+    }
+
+    private void oilDialog() {
+        final android.widget.EditText etInterval = new android.widget.EditText(this);
+        etInterval.setSingleLine(true);
+        final int curInterval = (int) prefs.getFloat("oil_change_interval_km", 8000f);
+        etInterval.setText(String.valueOf(curInterval));
+        final android.widget.EditText etOdo = new android.widget.EditText(this);
+        etOdo.setSingleLine(true);
+        final float curOdo = prefs.getFloat("oil_last_service_odometer", 0f);
+        etOdo.setText(curOdo > 0f ? String.valueOf((int) curOdo) : "");
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (18 * s);
+        col.setPadding(pad, pad, pad, 0);
+        TextView l1 = tv("Intervalo (km)", 13, MUTED, false);
+        col.addView(l1);
+        col.addView(etInterval, new LinearLayout.LayoutParams(-1, -2));
+        TextView l2 = tv("Odómetro del último cambio (km)", 13, MUTED, false);
+        l2.setPadding(0, (int) (10 * s), 0, 0);
+        col.addView(l2);
+        col.addView(etOdo, new LinearLayout.LayoutParams(-1, -2));
+        new AlertDialog.Builder(this, dlg())
+            .setTitle("Control de aceite")
+            .setView(col)
+            .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    try {
+                        float interval = Float.parseFloat(etInterval.getText().toString().trim());
+                        if (interval > 0f) prefs.edit().putFloat("oil_change_interval_km", interval).apply();
+                    } catch (Throwable ignored) {}
+                    try {
+                        String t = etOdo.getText().toString().trim();
+                        if (t.length() > 0) {
+                            float o = Float.parseFloat(t);
+                            if (o >= 0f) prefs.edit().putFloat("oil_last_service_odometer", o).apply();
+                        }
+                    } catch (Throwable ignored) {}
+                    updateTelemetryBar();
+                }
+            })
+            .setNeutralButton("Aceite nuevo", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    prefs.edit().putFloat("oil_last_service_odometer", odoKmTotal >= 0f ? odoKmTotal : 0f).apply();
+                    updateTelemetryBar();
+                }
+            })
+            .setNegativeButton("Cancelar", null)
+            .show();
+    }
+
+    /** Barra del tacómetro: verde → amarillo → rojo según RPM (0-6500). */
+    private class RpmGauge extends View {
+        private float value = -1f;
+        RpmGauge() { super(Main.this); }
+        void setValue(float v) { value = v; invalidate(); }
+        @Override protected void onDraw(android.graphics.Canvas c) {
+            super.onDraw(c);
+            float w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            android.graphics.Paint track = new android.graphics.Paint();
+            track.setColor(BTN);
+            track.setStyle(android.graphics.Paint.Style.FILL);
+            float r = h / 2f;
+            c.drawRoundRect(0, 0, w, h, r, r, track);
+            if (value >= 0) {
+                float frac = Math.max(0f, Math.min(1f, value / 6500f));
+                float fw = w * frac;
+                int n = Math.max(1, Math.round(fw / (6f * s)));
+                int[] cols = {0xFF43A047, 0xFFFB8C00, 0xFFF44336};
+                for (int i = 0; i < n; i++) {
+                    float f0 = i / (float) n, f1 = (i + 1) / (float) n;
+                    android.graphics.Paint p = new android.graphics.Paint();
+                    p.setColor(f1 <= 0.4f ? cols[0] : f1 <= 0.75f ? cols[1] : cols[2]);
+                    c.drawRect(w * f0, 0, w * f1, h, p);
+                }
+            }
+        }
+    }
+
+    /** Barra de progreso simple (acento), -1 = sin datos. */
+    private class MiniBar extends View {
+        private float frac = -1f;
+        MiniBar() { super(Main.this); }
+        void setFraction(float f) { frac = f; invalidate(); }
+        @Override protected void onDraw(android.graphics.Canvas c) {
+            super.onDraw(c);
+            float w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            android.graphics.Paint track = new android.graphics.Paint();
+            track.setColor(BTN);
+            c.drawRoundRect(0, 0, w, h, h / 2f, h / 2f, track);
+            if (frac >= 0f) {
+                float fw = w * Math.max(0f, Math.min(1f, frac));
+                android.graphics.Paint p = new android.graphics.Paint();
+                p.setColor(RED);
+                c.drawRoundRect(0, 0, fw, h, h / 2f, h / 2f, p);
+            }
+        }
     }
 
     private void buildWebCard() {
@@ -1520,6 +1801,7 @@ public class Main extends Activity {
     private final Runnable progressTick = new Runnable() {
         public void run() {
             updateProgress();
+            updateTelemetryBar();
             h.postDelayed(this, 1000);
         }
     };
