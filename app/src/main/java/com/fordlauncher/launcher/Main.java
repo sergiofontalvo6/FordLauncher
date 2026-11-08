@@ -120,6 +120,7 @@ public class Main extends Activity {
     private boolean askedMediaPerm;
     private com.fordlauncher.launcher.obd.ObdRepository obdRepo;
     private FrameLayout workshopView;
+    private DiagnosticoView workshop;
     static final int SDK = android.os.Build.VERSION.SDK_INT;
     private PlayerArt playerArt;
     // estado de la pista
@@ -495,6 +496,8 @@ public class Main extends Activity {
         }
         h.removeCallbacks(btTicker);
         try { if (mediaWatcher != null) mediaWatcher.stop(); } catch (Throwable ignored) { }
+        try { if (workshop != null) workshop.onDestroy(); } catch (Throwable ignored) {}
+        workshop = null;
         try { if (parked != null) parked.onDestroy(); } catch (Throwable ignored) { }
         super.onDestroy();
     }
@@ -1034,7 +1037,8 @@ public class Main extends Activity {
         workshopView = new FrameLayout(this);
         workshopView.setBackgroundColor(BG);
         workshopView.setClickable(true);
-        DiagnosticoView workshop = new DiagnosticoView(this, s);
+        DiagnosticoView w = new DiagnosticoView(this, s);
+        workshop = w;
         workshopView.addView(workshop.build(), new FrameLayout.LayoutParams(-1, -1));
         TextView close = tv("✕ Inicio", 12, Color.WHITE, true);
         close.setGravity(Gravity.CENTER);
@@ -1053,6 +1057,8 @@ public class Main extends Activity {
     }
 
     private void closeObdDiag() {
+        try { if (workshop != null) workshop.onDestroy(); } catch (Throwable ignored) {}
+        workshop = null;
         if (workshopView != null) { try { board.removeView(workshopView); } catch (Throwable ignored) {} workshopView = null; }
     }
 
@@ -2315,6 +2321,13 @@ public class Main extends Activity {
             new IntCb() { public void on(int i) {
                 prefs.edit().putString("parked_mode_type", i == 1 ? "image" : "clock").apply(); showSettings(2);
             }});
+        LinearLayout ai = section(body, "Diagnóstico inteligente");
+        String apiKey = prefs.getString("gemini_api_key", "");
+        row(ai, "Clave API de Gemini", "Diagnóstico con IA en las pestañas Salud y Códigos (gratis en Google AI Studio)", (apiKey == null || apiKey.trim().length() == 0) ? "Sin clave" : "Configurada",
+            edit("gemini_api_key", "Clave API de Gemini", ""));
+        toggle(ai, "Leer diagnóstico en voz alta", "Lee automáticamente la respuesta de la IA al terminar de analizar", prefs.getBoolean("tts_auto_read", true), new IntCb() { public void on(int i) {
+            prefs.edit().putBoolean("tts_auto_read", i == 1).apply(); showSettings(2);
+        }});
     }
 
     private void catConnection(LinearLayout body) {

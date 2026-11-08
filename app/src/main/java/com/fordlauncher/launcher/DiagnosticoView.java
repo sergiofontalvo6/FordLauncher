@@ -18,8 +18,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
+import com.fordlauncher.launcher.obd.CarVoiceSpeaker;
 import com.fordlauncher.launcher.obd.Codes;
 import com.fordlauncher.launcher.obd.Derived;
+import com.fordlauncher.launcher.obd.GeminiDiagnosticClient;
 import com.fordlauncher.launcher.obd.Health;
 import com.fordlauncher.launcher.obd.ObdRepository;
 import com.fordlauncher.launcher.obd.Pids;
@@ -100,6 +102,15 @@ public class DiagnosticoView {
     private TextView accelSpeed;
     private TextView accelBest;
     private LinearLayout tripsCol;
+
+    // Diagnóstico inteligente IA (Gemini + voz)
+    private CarVoiceSpeaker speaker;
+    private TextView aiResult;
+    private TextView aiStatus;
+    private TextView aiAnalyzeBtn;
+    private TextView aiSpeakBtn;
+    private String lastAiText;
+    private boolean aiBusy;
 
     private static final class TileW {
         View dot;
@@ -183,19 +194,21 @@ public class DiagnosticoView {
         lastAdapterBuilt = null; lastAdapterState = null;
         adapterStatus = null; adapterBtns = null;
         carView = null;
+        aiResult = null; aiStatus = null; aiAnalyzeBtn = null; aiSpeakBtn = null;
         monochrome();
         boolean on = repo.getState() == ObdRepository.State.ON;
         tabBar.setVisibility(on ? View.VISIBLE : View.GONE);
         if (!on) {
             buildHealthCard(content, false);
+            buildAiCard(content);
             buildAdapterCard(content);
             buildAlertsCard(content);
             buildTripsCard(content);
         } else {
             paintTabs();
             switch (currentTab) {
-                case 0: buildHealthCard(content, true); break;
-                case 1: buildCodesCard(content); buildInspectionCard(content); refreshCodes(); break;
+                case 0: buildHealthCard(content, true); buildAiCard(content); break;
+                case 1: buildCodesCard(content); buildInspectionCard(content); buildAiCard(content); refreshCodes(); break;
                 case 2: buildSensorsCard(content); break;
                 case 3: buildChartsCard(content); break;
                 default: buildAdapterCard(content); buildAlertsCard(content); buildAccelCard(content); buildTripsCard(content); break;
@@ -532,6 +545,154 @@ public class DiagnosticoView {
                 ui.post(new Runnable(){ public void run(){ reading = false; readingBg = false; refreshHealth(); if (currentTab == 1) refreshCodes(); } });
             }
         }}).start();
+    }
+
+    // ---------- DIAGNÓSTICO INTELIGENTE IA (Gemini + voz) ----------
+    private void buildAiCard(LinearLayout col) {
+        LinearLayout card = card(col, "Diagnóstico inteligente IA");
+        aiStatus = txt("", 12, MUTED(), false);
+        aiStatus.setVisibility(View.GONE);
+        aiStatus.setPadding(0, (int)(4*s), 0, 0);
+        card.addView(aiStatus, new LinearLayout.LayoutParams(-1, -2));
+        aiResult = txt("Toca «Analizar con IA» para combinar DTCs y sensores con Gemini.", 13, TEXT(), false);
+        if (lastAiText != null) aiResult.setText(lastAiText);
+        aiResult.setPadding(0, (int)(4*s), 0, (int)(8*s));
+        card.addView(aiResult, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout row = new LinearLayout(host);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        aiAnalyzeBtn = button(row, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(); } });
+        aiSpeakBtn = button(row, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
+        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        updateAiSpeakLabel();
+    }
+
+    private void updateAiSpeakLabel() {
+        if (aiSpeakBtn == null) return;
+        boolean speaking = speaker != null && speaker.isSpeaking();
+        aiSpeakBtn.setText(speaking ? "⏹ Detener" : "🔊 Escuchar");
+    }
+
+    private CarVoiceSpeaker ensureSpeaker() {
+        if (speaker != null) return speaker;
+        speaker = new CarVoiceSpeaker(host);
+        speaker.setListener(new CarVoiceSpeaker.Listener(){
+            public void onSpeaking(boolean speaking) { ui.post(new Runnable(){ public void run(){ updateAiSpeakLabel(); } }); }
+            public void onError(String msg) { ui.post(new Runnable(){ public void run(){
+                if (aiResult != null && lastAiText != null) aiResult.setText(msg + "\n\n" + lastAiText);
+                else if (aiResult != null) aiResult.setText(msg);
+                updateAiSpeakLabel();
+            } }); }
+        });
+        return speaker;
+    }
+
+    private void runsAiSpeak(String text) {
+        if (text == null) return;
+        ensureSpeaker().speak(text);
+        updateAiSpeakLabel();
+    }
+
+    private void toggleAiSpeak() {
+        if (speaker != null && speaker.isSpeaking()) { speaker.stop(); updateAiSpeakLabel(); return; }
+        if (lastAiText == null || lastAiText.length() == 0) return;
+        runsAiSpeak(lastAiText);
+    }
+
+    private void setAiBusy(boolean busy) {
+        aiBusy = busy;
+        if (aiStatus != null) {
+            aiStatus.setText(busy ? "Consultando telemetría..." : "");
+            aiStatus.setVisibility(busy ? View.VISIBLE : View.GONE);
+        }
+        if (aiAnalyzeBtn != null) aiAnalyzeBtn.setEnabled(!busy);
+    }
+
+    private void runAiAnalyze() {
+        if (aiBusy) return;
+        String snap = buildSnapshotJson();
+        setAiBusy(true);
+        if (aiResult != null) aiResult.setText("Consultando telemetría...");
+        GeminiDiagnosticClient.analyze(host, snap, new GeminiDiagnosticClient.Callback(){
+            public void onDone(final String text, final String error) {
+                ui.post(new Runnable(){ public void run(){
+                    setAiBusy(false);
+                    if (error != null) {
+                        if (aiResult != null) aiResult.setText(error);
+                        lastAiText = null;
+                        updateAiSpeakLabel();
+                        return;
+                    }
+                    lastAiText = text;
+                    if (aiResult != null) aiResult.setText(text);
+                    updateAiSpeakLabel();
+                    try {
+                        if (host.getPrefs().getBoolean("tts_auto_read", true)) runsAiSpeak(text);
+                    } catch (Throwable ignored) {}
+                } });
+            }
+        });
+    }
+
+    private String buildSnapshotJson() {
+        Health.EngineReport r = report != null ? report : repo.getLastReport();
+        Map<String, Float> v = null;
+        try { v = repo.getValues(); } catch (Throwable ignored) {}
+        if (v == null) v = new LinkedHashMap<String, Float>();
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"dtc_stored\":"); appendCodeArray(sb, r != null ? r.stored : null);
+        sb.append(",\"dtc_pending\":"); appendCodeArray(sb, r != null ? r.pending : null);
+        sb.append(",\"dtc_permanent\":"); appendCodeArray(sb, r != null ? r.permanent : null);
+        sb.append(",\"mil\":"); sb.append(r != null && r.readiness != null && r.readiness.mil ? "true" : "false");
+        if (r != null && r.vin != null) sb.append(",\"vin\":\"").append(jsonEscape(r.vin)).append("\"");
+        if (r != null && r.voltage != null) sb.append(",\"voltage_report\":").append(r.voltage.floatValue());
+        String[] keys = {Pids.RPM, Pids.COOLANT, Pids.VOLTAGE, Pids.SPEED, Pids.LOAD, Pids.INTAKE, Pids.MAP, Pids.MAF, Pids.THROTTLE, Pids.OIL, Pids.FUEL_TRIM_SHORT, Pids.FUEL_TRIM_LONG};
+        for (int i = 0; i < keys.length; i++) {
+            Float f = v.get(keys[i]);
+            if (f != null) sb.append(",\"").append(jsonEscape(keys[i])).append("\":").append(f.floatValue());
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private static void appendCodeArray(StringBuilder sb, List<String> codes) {
+        sb.append("[");
+        if (codes != null) {
+            for (int i = 0; i < codes.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(buildCodeDesc(codes.get(i)));
+            }
+        }
+        sb.append("]");
+    }
+
+    private static String buildCodeDesc(String code) {
+        if (code == null) return "\"\"";
+        String desc = null;
+        try { desc = Codes.describe(code); } catch (Throwable ignored) {}
+        if (desc == null || desc.length() == 0) desc = code;
+        else desc = code + ": " + desc;
+        return "\"" + jsonEscape(desc) + "\"";
+    }
+
+    private static String jsonEscape(String s) {
+        StringBuilder o = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"') o.append("\\\"");
+            else if (c == '\\') o.append("\\\\");
+            else if (c == '\n') o.append("\\n");
+            else if (c == '\r') o.append("\\r");
+            else if (c == '\t') o.append("\\t");
+            else if (c < 0x20) o.append(String.format("\\u%04x", (int) c));
+            else o.append(c);
+        }
+        return o.toString();
+    }
+
+    public void onDestroy() {
+        try { if (speaker != null) speaker.shutdown(); } catch (Throwable ignored) {}
+        speaker = null;
     }
 
     // ---------- CODIGOS (Workshop.kt CodesCard + InspectionCard) ----------

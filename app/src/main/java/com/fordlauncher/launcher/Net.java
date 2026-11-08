@@ -99,7 +99,7 @@ public class Net {
         return null;
     }
 
-    private static boolean verifyOriginalHostUnused(String origHost, javax.net.ssl.SSLSession session) {
+    private static boolean verifyOriginalHost(String origHost, javax.net.ssl.SSLSession session) {
         try {
             java.security.cert.Certificate[] certs = session.getPeerCertificates();
             if (certs == null || certs.length == 0 || !(certs[0] instanceof X509Certificate)) return false;
@@ -176,6 +176,54 @@ public class Net {
         throw new Exception("HTTP demasiadas redirecciones");
     }
 
+    public static byte[] postJson(String url, byte[] body, int timeoutMs) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        if (c instanceof HttpsURLConnection && factory != null) {
+            ((HttpsURLConnection) c).setSSLSocketFactory(factory);
+        }
+        c.setInstanceFollowRedirects(false);
+        c.setConnectTimeout(timeoutMs);
+        c.setReadTimeout(timeoutMs);
+        c.setDoOutput(true);
+        c.setRequestMethod("POST");
+        c.setRequestProperty("User-Agent", "FordLauncher/2.1 (Android head unit launcher)");
+        c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+        c.setRequestProperty("Accept", "application/json, */*");
+        c.setFixedLengthStreamingMode(body.length);
+        try {
+            java.io.OutputStream os = c.getOutputStream();
+            os.write(body);
+            os.close();
+            int code = c.getResponseCode();
+            if (code != 200) {
+                String extra = "";
+                try {
+                    InputStream err = c.getErrorStream();
+                    if (err != null) {
+                        ByteArrayOutputStream eb = new ByteArrayOutputStream();
+                        byte[] bb = new byte[4096];
+                        int en;
+                        while ((en = err.read(bb)) > 0) eb.write(bb, 0, en);
+                        err.close();
+                        String txt = new String(eb.toByteArray(), "UTF-8").trim().replaceAll("[\\r\\n]+", " ");
+                        if (txt.length() > 200) txt = txt.substring(0, 200);
+                        if (txt.length() > 0) extra = " (" + txt + ")";
+                    }
+                } catch (Throwable ignored) {}
+                throw new Exception("HTTP " + code + extra);
+            }
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            in.close();
+            return out.toByteArray();
+        } finally {
+            c.disconnect();
+        }
+    }
+
     /** Envuelve la fábrica para encender TLS 1.1/1.2 en cada socket. */
     private static class Tls12Factory extends SSLSocketFactory {
         private final SSLSocketFactory d;
@@ -183,7 +231,7 @@ public class Net {
         private Socket on(Socket s) { return on(s, null); }
         private Socket on(Socket s, String host) {
             if (s instanceof SSLSocket) {
-                // SNI correcto: URL con hostname
+                
                 
                 try { // todos los cifrados que tenga el equipo (Android 4.x trae pocos activados)
                     ((SSLSocket) s).setEnabledCipherSuites(((SSLSocket) s).getSupportedCipherSuites());
