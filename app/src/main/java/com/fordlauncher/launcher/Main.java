@@ -2047,9 +2047,9 @@ public class Main extends Activity {
                     build(root.getWidth(), root.getHeight());
                 }
             });
-        if ("gemini_api_key".equals(key)) {
+        if ("gemini_api_key".equals(key) || "gh_token".equals(key)) {
             b.setNeutralButton("Importar .txt", new DialogInterface.OnClickListener() {
-                public void onClick(DialogInterface d, int w) { pickApiKeyFile(); }
+                public void onClick(DialogInterface d, int w) { pickImportFile(key); }
             });
         }
         b.setNegativeButton("Cancelar", null)
@@ -2057,20 +2057,26 @@ public class Main extends Activity {
     }
 
     private static final int REQ_API_FILE = 43;
+    private String pendingImportKey;
 
-    private void pickApiKeyFile() {
+    private void pickImportFile(String prefKey) {
+        pendingImportKey = prefKey;
         try {
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             i.addCategory(Intent.CATEGORY_OPENABLE);
             i.setType("*/*");
-            startActivityForResult(Intent.createChooser(i, "Selecciona tu clave de Gemini (.txt)"), REQ_API_FILE);
+            startActivityForResult(Intent.createChooser(i, "Selecciona tu archivo (.txt)"), REQ_API_FILE);
         } catch (Throwable t) {
             toast("No hay selector de archivos en esta pantalla");
         }
     }
 
     private void importApiKeyFile(android.net.Uri uri) {
-        if (uri == null) { toast("No se eligió ningún archivo"); return; }
+        importTokenFile(uri, pendingImportKey);
+    }
+
+    private void importTokenFile(android.net.Uri uri, String prefKey) {
+        if (uri == null || prefKey == null) { toast("No se eligió ningún archivo"); return; }
         String raw = null;
         try {
             java.io.InputStream in = getContentResolver().openInputStream(uri);
@@ -2090,8 +2096,9 @@ public class Main extends Activity {
         if (key.length() == 0) { toast("El archivo está vacío"); return; }
         int nl = key.indexOf('\n');
         if (nl >= 0) key = key.substring(0, nl).trim(); // solo la primera línea: es la clave
-        prefs.edit().putString("gemini_api_key", key).apply();
-        toast("Clave importada desde el archivo");
+        prefs.edit().putString(prefKey, key).apply();
+        toast("Importado desde el archivo");
+        pendingImportKey = null;
         if (settingsView != null) showSettings(settingsCat);
     }
 
