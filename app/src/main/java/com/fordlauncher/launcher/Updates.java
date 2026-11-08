@@ -71,6 +71,8 @@ public class Updates {
     public static void check(final Context ctx, final Listener l) {
         new Thread(new Runnable() {
             public void run() {
+                // TLS de pantallas viejas: asegurar la fábrica aunque el mapa no se haya creado aun.
+                try { Net.init(ctx); } catch (Throwable ignored) {}
                 // Se consultan todas las fuentes y gana la versión más alta: una copia en caché (jsDelivr)
                 // puede estar atrasada horas, y en Android 4.x algunas fuentes fallan por el cifrado.
                 Release r = null;
@@ -79,7 +81,11 @@ public class Updates {
                 for (int i = 0; i <= JSON_URLS.length; i++) {
                     Release c = null;
                     try { c = i == 0 ? fromApi() : fromJson(ctx, JSON_URLS[i - 1]); }
-                    catch (Throwable e) { lastError = names[i] + ": " + e; rep.append(names[i]).append(": ").append(shortErr(e)).append('\n'); }
+                    catch (Throwable e) {
+                        lastError = names[i] + ": " + e;
+                        rep.append(names[i]).append(": ").append(shortErr(e)).append(" [").append(e.toString().replaceAll("[\\r\\n]+", " ")).append("]\n");
+                        try { android.util.Log.w("FordLauncher/Updates", "Fallo " + names[i] + ": " + e.toString()); } catch (Throwable ignored) {}
+                    }
                     if (c == null) continue;
                     rep.append(names[i]).append(": ").append(c.version).append('\n');
                     if (r == null || compare(c.version, r.version) > 0) { r = c; r.source = names[i]; }

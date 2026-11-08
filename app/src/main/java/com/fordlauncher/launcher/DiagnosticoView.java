@@ -922,8 +922,9 @@ public class DiagnosticoView {
             name.setPadding((int)(8*s), (int)(3*s), (int)(8*s), (int)(3*s));
             row.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
             if (!pts.isEmpty()) {
-                float mn = pts.get(0), mx = pts.get(0);
-                for (Float f : pts) { if (f < mn) mn = f; if (f > mx) mx = f; }
+                float mn = 0f, mx = 0f; boolean any = false;
+                for (Float f : pts) { if (f == null) continue; if (!any) { mn = f; mx = f; any = true; } else { if (f < mn) mn = f; if (f > mx) mx = f; } }
+                if (!any) { TextView nd = txt("--", 13, MUTED(), true); nd.setPadding((int)(8*s), 0, 0, 0); row.addView(nd, new LinearLayout.LayoutParams(-2, -2)); chartLegend.addView(row, new LinearLayout.LayoutParams(-1, -2)); continue; }
                 TextView range = txt(sensorText(sig, mn) + " … " + sensorText(sig, mx), 11, MUTED(), false);
                 range.setMaxLines(1);
                 range.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -1225,11 +1226,13 @@ public class DiagnosticoView {
         }
     }
 
+    static List<Float> sanitize(List<Float> p) { List<Float> o = new ArrayList<Float>(); if (p != null) for (Float f : p) if (f != null) o.add(f); return o; }
+
     public class Sparkline extends View {
         private List<Float> points;
         private int color;
         public Sparkline() { super(host); }
-        public void setPoints(List<Float> p) { points = p; invalidate(); }
+        public void setPoints(List<Float> p) { points = sanitize(p); invalidate(); }
         public void setColor(int c) { color = c; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             super.onDraw(c);
@@ -1237,19 +1240,23 @@ public class DiagnosticoView {
             float w = getWidth(), h = getHeight();
             if (w == 0 || h == 0) return;
             int cap = SERIES_POINTS;
-            float mn = points.get(0), mx = points.get(0);
-            for (Float f : points) { if (f < mn) mn = f; if (f > mx) mx = f; }
+            float mn = 0f, mx = 0f; boolean any = false;
+            for (Float f : points) { if (f == null) continue; if (!any) { mn = f; mx = f; any = true; } else { if (f < mn) mn = f; if (f > mx) mx = f; } }
+            if (!any) return;
             float half = Math.max((mx - mn) / 2f, 5e-4f);
             float lo = (mn + mx) / 2f - half;
             Paint strokeP = new Paint(); strokeP.setColor(color); strokeP.setStrokeWidth(Math.max(2f, 1.6f * s)); strokeP.setAntiAlias(true);
             strokeP.setStrokeCap(Paint.Cap.ROUND); strokeP.setStrokeJoin(Paint.Join.ROUND); strokeP.setStyle(Paint.Style.STROKE);
             Path line = new Path();
+            boolean first=true;
             for (int k = 0; k < points.size(); k++) {
+                Float fv = points.get(k); if (fv == null) continue;
                 float x = w * (cap - points.size() + k) / (cap - 1);
-                float frac = (points.get(k) - lo) / (2 * half);
+                float frac = (fv - lo) / (2 * half);
                 float y = h * (1f - frac) * 0.8f + h * 0.1f;
-                if (k == 0) line.moveTo(x, y); else line.lineTo(x, y);
+                if (first) { line.moveTo(x, y); first = false; } else line.lineTo(x, y);
             }
+            if (first) return;
             Paint fill = new Paint(); fill.setColor(color); fill.setAlpha(55); fill.setStyle(Paint.Style.FILL); fill.setAntiAlias(true);
             Path area = new Path(area(line, w, h, cap, points.size()));
             c.drawPath(area, fill);
@@ -1267,7 +1274,7 @@ public class DiagnosticoView {
         private int[] colors = new int[]{ACCENT(), CHART2};
         private Float touch;
         public ChartView() { super(host); }
-        public void setSeries(List<List<Float>> s2) { series = s2; invalidate(); }
+        public void setSeries(List<List<Float>> s2) { series = new ArrayList<List<Float>>(); if (s2 != null) for (List<Float> p : s2) series.add(sanitize(p)); invalidate(); }
         public void setColors(int[] c) { colors = c; }
         public void setTouch(Float f) { touch = f; }
         @Override protected void onDraw(Canvas c) {
@@ -1282,19 +1289,22 @@ public class DiagnosticoView {
             for (int i = 0; i < series.size(); i++) {
                 List<Float> pts = series.get(i);
                 if (pts == null || pts.size() < 2) continue;
-                float mn = pts.get(0), mx = pts.get(0);
-                for (Float f : pts) { if (f < mn) mn = f; if (f > mx) mx = f; }
+                float mn = 0f, mx = 0f; boolean any = false;
+                for (Float f : pts) { if (f == null) continue; if (!any) { mn = f; mx = f; any = true; } else { if (f < mn) mn = f; if (f > mx) mx = f; } }
+                if (!any) continue;
                 float hi = (mx - mn < 1e-3f) ? mn + 1f : mx;
                 float lo = mn;
                 int col = i < colors.length ? colors[i] : ACCENT();
                 Paint strokeP = new Paint(); strokeP.setColor(col); strokeP.setStrokeWidth(Math.max(2f, 2f * s));
                 strokeP.setAntiAlias(true); strokeP.setStrokeCap(Paint.Cap.ROUND); strokeP.setStrokeJoin(Paint.Join.ROUND); strokeP.setStyle(Paint.Style.STROKE);
                 Path line = new Path();
+                boolean first = true;
                 for (int k = 0; k < pts.size(); k++) {
+                    Float pv = pts.get(k); if (pv == null) continue;
                     float x = w * (SERIES_POINTS - pts.size() + k) / (SERIES_POINTS - 1);
-                    float frac = (pts.get(k) - lo) / (hi - lo);
+                    float frac = (pv - lo) / (hi - lo);
                     float y = h * (1f - frac) * 0.9f + h * 0.05f;
-                    if (k == 0) line.moveTo(x, y); else line.lineTo(x, y);
+                    if (first) { line.moveTo(x, y); first = false; } else line.lineTo(x, y);
                 }
                 c.drawPath(line, strokeP);
                 if (touch != null) {

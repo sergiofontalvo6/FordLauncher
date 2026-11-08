@@ -60,7 +60,7 @@ public class ObdRepository {
     public java.util.List<Float> getHistory(String signal) {
         synchronized(history) {
             java.util.Deque<Float> q = history.get(signal);
-            return q != null ? new ArrayList<Float>(q) : new ArrayList<Float>();
+            java.util.List<Float> o = new ArrayList<Float>(); if (q != null) for (Float x : q) if (x != null) o.add(x); return o;
         }
     }
     public TripLog.AccelTimer getAccel() { return accel; }
@@ -159,7 +159,8 @@ public class ObdRepository {
                         failures = 0;
                     } catch (java.io.IOException e) {
                         if (++failures >= 3) throw e;
-                    }
+                    } catch (Throwable ignored) {}
+                    // NPE/parse (NO DATA, STOPPED, vacio): se salta ese PID esta vuelta, sin desconectar
                 }
                 if (slow) {
                     try {
@@ -176,9 +177,11 @@ public class ObdRepository {
                     boolean need = true;
                     for (String n : d.needs) if (!last.containsKey(n)) need = false;
                     if (!need) continue;
-                    Float raw = d.compute.compute(new HashMap<String,Float>(last));
+                    Float raw = null; try { raw = d.compute.compute(new HashMap<String,Float>(last)); } catch (Throwable ignored) { raw = null; }
                     Float prev = smoothed.get(d.signal);
-                    Float val = (raw == null || prev == null) ? raw : prev + (raw - prev) * d.smoothing;
+                    Float val;
+                    if (raw == null || prev == null || !(d.smoothing > 0f)) val = raw;
+                    else { float rp = raw; float pp = prev; val = pp + (rp - pp) * d.smoothing; }
                     if (val != null) smoothed.put(d.signal, val); else smoothed.remove(d.signal);
                     batch.put(d.signal, val);
                 }

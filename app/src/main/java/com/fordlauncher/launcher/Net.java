@@ -31,6 +31,9 @@ public class Net {
     static String initInfo = "sin iniciar";
 
     public static synchronized void init(Context c) {
+        // En pantallas con Tethering/hotspot y emuladores hay IPv6 sin ruta (2606:...):
+        // sin esto, GitHub/jsDelivr se cuelgan 10s y las actualizaciones fallan con "error de red".
+        try { System.setProperty("java.net.preferIPv4Stack", "true"); } catch (Throwable ignored) {}
         if (factory != null) return;
         try {
             final X509TrustManager system = defaultTm(null);
@@ -85,25 +88,92 @@ public class Net {
         throw new IllegalStateException("sin TrustManager");
     }
 
-    public static byte[] get(String url, int timeoutMs) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        if (c instanceof HttpsURLConnection && factory != null) ((HttpsURLConnection) c).setSSLSocketFactory(factory);
-        c.setConnectTimeout(timeoutMs);
-        c.setReadTimeout(timeoutMs);
-        c.setRequestProperty("User-Agent", "FordLauncher/2.1 (Android head unit launcher)");
+
+    private static String resolveIPv4(String host) {
+        if (host == null || host.length() == 0) return null;
         try {
-            int code = c.getResponseCode();
-            if (code != 200) throw new Exception("HTTP " + code);
-            InputStream in = c.getInputStream();
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            in.close();
-            return out.toByteArray();
-        } finally {
-            c.disconnect();
+            if (host.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")) return host;
+            java.net.InetAddress[] addrs = java.net.InetAddress.getAllByName(host);
+            for (java.net.InetAddress a : addrs) if (a instanceof java.net.Inet4Address) return a.getHostAddress();
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static boolean verifyOriginalHostUnused(String origHost, javax.net.ssl.SSLSession session) {
+        try {
+            java.security.cert.Certificate[] certs = session.getPeerCertificates();
+            if (certs == null || certs.length == 0 || !(certs[0] instanceof X509Certificate)) return false;
+            X509Certificate cert = (X509Certificate) certs[0];
+            java.util.Collection<java.util.List<?>> sans = cert.getSubjectAlternativeNames();
+            if (sans != null) for (java.util.List<?> san : sans) {
+                if (san.size() >= 2 && Integer.valueOf(7).equals(san.get(0))) {
+                    String name = (String) san.get(1);
+                    if (origHost.equalsIgnoreCase(name)) return true;
+                }
+            }
+            return cert.getSubjectX500Principal().getName().contains(origHost);
+        } catch (Throwable e) {
+            return false;
         }
+    }
+
+    public static byte[] get(String url, int timeoutMs) throws Exception {
+        String current = url;
+        // GitHub API /releases/latest responde 302 a /releases/tag/vX: seguirlo a mano
+        // (HttpURLConnection no siempre lo sigue en Android viejo / https->https distinto host).
+        for (int hop = 0; hop <= 5; hop++) {
+            URL parsed = new URL(current);
+            HttpURLConnection c = (HttpURLConnection) parsed.openConnection();
+            if (c instanceof HttpsURLConnection && factory != null) {
+                ((HttpsURLConnection) c).setSSLSocketFactory(factory);
+            }
+            c.setInstanceFollowRedirects(false);
+            c.setConnectTimeout(timeoutMs);
+            c.setReadTimeout(timeoutMs);
+            c.setRequestProperty("User-Agent", "FordLauncher/2.1 (Android head unit launcher)");
+            c.setRequestProperty("Accept", "application/vnd.github.v3+json, application/json, */*");
+            try {
+                int code = c.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String loc = c.getHeaderField("Location");
+                    if (loc == null || loc.length() == 0) throw new Exception("HTTP " + code);
+                    current = new URL(parsed, loc).toString();
+                    continue;
+                }
+                if (code != 200) {
+                    // Para 403/429 de GitHub (limite) leer el cuerpo: trae el mensaje util.
+                    String extra = "";
+                    try {
+                        InputStream err = c.getErrorStream();
+                        if (err != null) {
+                            ByteArrayOutputStream eb = new ByteArrayOutputStream();
+                            byte[] bb = new byte[4096];
+                            int en;
+                            while ((en = err.read(bb)) > 0) eb.write(bb, 0, en);
+                            err.close();
+                            String body = new String(eb.toByteArray(), "UTF-8").trim().replaceAll("[\\r\\n]+", " ");
+                            if (body.length() > 160) body = body.substring(0, 160);
+                            if (body.length() > 0) extra = " (" + body + ")";
+                        }
+                    } catch (Throwable ignored) {}
+                    if (code == 429 || code == 403) {
+                        String ra = c.getHeaderField("Retry-After");
+                        if (ra != null && ra.length() > 0) extra += " Retry-After:" + ra;
+                    }
+                    throw new Exception("HTTP " + code + extra);
+                }
+                InputStream in = c.getInputStream();
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                in.close();
+                return out.toByteArray();
+            } finally {
+                c.disconnect();
+            }
+        }
+        throw new Exception("HTTP demasiadas redirecciones");
     }
 
     /** Envuelve la fábrica para encender TLS 1.1/1.2 en cada socket. */
@@ -113,6 +183,8 @@ public class Net {
         private Socket on(Socket s) { return on(s, null); }
         private Socket on(Socket s, String host) {
             if (s instanceof SSLSocket) {
+                // SNI correcto: URL con hostname
+                
                 try { // todos los cifrados que tenga el equipo (Android 4.x trae pocos activados)
                     ((SSLSocket) s).setEnabledCipherSuites(((SSLSocket) s).getSupportedCipherSuites());
                 } catch (Throwable ignored) { }
@@ -132,7 +204,7 @@ public class Net {
         public String[] getDefaultCipherSuites() { return d.getDefaultCipherSuites(); }
         public String[] getSupportedCipherSuites() { return d.getSupportedCipherSuites(); }
         public Socket createSocket(Socket s, String h, int p, boolean a) throws java.io.IOException { return on(d.createSocket(s, h, p, a), h); }
-        public Socket createSocket(String h, int p) throws java.io.IOException { return on(d.createSocket(h, p), h); }
+        public Socket createSocket(String h, int p) throws java.io.IOException { String ip = resolveIPv4(h); if (ip != null) { try { return on(d.createSocket(java.net.InetAddress.getByName(ip), p), h); } catch (Throwable ignored) {} } return on(d.createSocket(h, p), h); }
         public Socket createSocket(String h, int p, InetAddress l, int lp) throws java.io.IOException { return on(d.createSocket(h, p, l, lp), h); }
         public Socket createSocket(InetAddress h, int p) throws java.io.IOException { return on(d.createSocket(h, p)); }
         public Socket createSocket(InetAddress h, int p, InetAddress l, int lp) throws java.io.IOException { return on(d.createSocket(h, p, l, lp)); }

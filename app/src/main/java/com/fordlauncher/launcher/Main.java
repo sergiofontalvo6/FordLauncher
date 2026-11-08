@@ -2535,7 +2535,7 @@ public class Main extends Activity {
                     if (r != null) {
                         if (manual || !r.version.equals(prefs.getString("upd_skip", ""))) updateDialog(r);
                     } else if (manual) {
-                        if (err != null) linkDialog("No se pudo comprobar", "Esta pantalla no logró conectarse con GitHub (" + shortNetErr(err) + "). Puedes revisar las versiones desde tu celular:", Updates.RELEASES_URL);
+                        if (err != null) linkDialog("No se pudo comprobar", "Esta pantalla no logró conectarse con GitHub (" + shortNetErr(err) + "). Fuentes:\n" + Updates.lastReport + "\n\nPuedes revisar las versiones desde tu celular:", Updates.RELEASES_URL);
                         else new AlertDialog.Builder(Main.this, dlg()).setTitle("Tienes la última versión (" + Updates.currentVersion(Main.this) + ")")
                             .setMessage("Fuentes consultadas:\n" + Updates.lastReport).setPositiveButton("OK", null).show();
                     }
@@ -2548,6 +2548,8 @@ public class Main extends Activity {
         if (e.contains("SSL") || e.contains("handshake")) return "cifrado no compatible";
         if (e.contains("UnknownHost")) return "sin internet";
         if (e.contains("Timeout")) return "tiempo agotado";
+        int i = e.indexOf("HTTP ");
+        if (i >= 0) return e.substring(i, Math.min(e.length(), i + 14));
         return "error de red";
     }
 
