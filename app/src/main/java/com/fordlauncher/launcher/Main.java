@@ -1101,12 +1101,12 @@ public class Main extends Activity {
 
         // Odómetro propio: suma km recorridos con velocidad en el tiempo.
         long nowMs = System.currentTimeMillis();
-        if (odoKmTotal < 0f) { odoKmTotal = prefs.getFloat("odo_km_total", 0f); odoLastSavedKm = odoKmTotal; }
+        if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
         if (speed != null && speed > 0f && telemLastMs > 0) {
             float dtH = (nowMs - telemLastMs) / 3600000f;
             if (dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
             if (odoKmTotal - odoLastSavedKm > 0.5f) {
-                prefs.edit().putFloat("odo_km_total", odoKmTotal).apply();
+                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).apply();
                 odoLastSavedKm = odoKmTotal;
             }
         }
@@ -1136,58 +1136,89 @@ public class Main extends Activity {
         consText.setText(consTxt);
         if (consBar != null) consBar.setFraction(consFrac);
 
-        float interval = prefs.getFloat("oil_change_interval_km", 8000f);
-        float lastSvc = prefs.getFloat("oil_last_service_odometer", 0f);
-        float usedKm = Math.max(0f, odoKmTotal - lastSvc);
-        float remain = interval - usedKm;
-        oilText.setText(remain >= 0f ? "Aceite: " + String.format(ES, "%,.0f km", remain) : "¡Cambio de aceite!");
-        oilText.setTextColor(remain < 1000f ? 0xFFD29922 : TEXT);
-        if (oilBar != null) oilBar.setFraction(interval > 0f ? usedKm / interval : 0f);
+        int interval = prefInt("oil_change_interval_km", 8000);
+        int lastSvc = prefInt("oil_last_service_odometer", 0);
+        int currentOdo = prefInt("odo_km_total", 0);
+        int kmUsados = Math.max(0, currentOdo - lastSvc);
+        int kmRestantes = interval - kmUsados;
+        oilText.setText(kmRestantes >= 0 ? "Aceite: " + String.format(ES, "%,d km", kmRestantes) : "¡Cambio de aceite!");
+        oilText.setTextColor(kmRestantes < 1000 ? 0xFFD29922 : TEXT);
+        if (oilBar != null) oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
+    }
+
+    /** Lee un int tolerando claves guardadas como float (instalaciones previas). */
+    private int prefInt(String key, int def) {
+        try { return prefs.getInt(key, def); }
+        catch (ClassCastException e) {
+            try { return (int) prefs.getFloat(key, def); } catch (Throwable t) { return def; }
+        } catch (Throwable t) { return def; }
     }
 
     private void oilDialog() {
+        final int currentOdo = prefInt("odo_km_total", 0);
+        final int lastOdo = prefInt("oil_last_service_odometer", 0);
+
         final android.widget.EditText etInterval = new android.widget.EditText(this);
         etInterval.setSingleLine(true);
-        final int curInterval = (int) prefs.getFloat("oil_change_interval_km", 8000f);
-        etInterval.setText(String.valueOf(curInterval));
-        final android.widget.EditText etOdo = new android.widget.EditText(this);
-        etOdo.setSingleLine(true);
-        final float curOdo = prefs.getFloat("oil_last_service_odometer", 0f);
-        etOdo.setText(curOdo > 0f ? String.valueOf((int) curOdo) : "");
+        etInterval.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etInterval.setTextColor(TEXT);
+        etInterval.setHintTextColor(MUTED);
+        etInterval.setText(String.valueOf(prefInt("oil_change_interval_km", 8000)));
+
+        final android.widget.EditText etLastOdo = new android.widget.EditText(this);
+        etLastOdo.setSingleLine(true);
+        etLastOdo.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etLastOdo.setTextColor(TEXT);
+        etLastOdo.setHintTextColor(MUTED);
+        etLastOdo.setText(String.valueOf(lastOdo > 0 ? lastOdo : prefInt("odo_km_total", 0)));
+
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (18 * s);
         col.setPadding(pad, pad, pad, 0);
+        TextView info = tv("Odómetro actual del auto: " + String.format(ES, "%,d", currentOdo) + " km", 13, MUTED, false);
+        col.addView(info);
         TextView l1 = tv("Intervalo (km)", 13, MUTED, false);
+        l1.setPadding(0, (int) (12 * s), 0, 0);
         col.addView(l1);
         col.addView(etInterval, new LinearLayout.LayoutParams(-1, -2));
         TextView l2 = tv("Odómetro del último cambio (km)", 13, MUTED, false);
         l2.setPadding(0, (int) (10 * s), 0, 0);
         col.addView(l2);
-        col.addView(etOdo, new LinearLayout.LayoutParams(-1, -2));
+        col.addView(etLastOdo, new LinearLayout.LayoutParams(-1, -2));
         new AlertDialog.Builder(this, dlg())
             .setTitle("Control de aceite")
             .setView(col)
             .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
+                    int nuevoIntervalo = prefInt("oil_change_interval_km", 8000);
+                    int odometroIngresado = prefInt("oil_last_service_odometer", 0);
                     try {
-                        float interval = Float.parseFloat(etInterval.getText().toString().trim());
-                        if (interval > 0f) prefs.edit().putFloat("oil_change_interval_km", interval).apply();
+                        int v = Integer.parseInt(etInterval.getText().toString().trim());
+                        if (v > 0) nuevoIntervalo = v;
                     } catch (Throwable ignored) {}
                     try {
-                        String t = etOdo.getText().toString().trim();
-                        if (t.length() > 0) {
-                            float o = Float.parseFloat(t);
-                            if (o >= 0f) prefs.edit().putFloat("oil_last_service_odometer", o).apply();
-                        }
+                        int v = Integer.parseInt(etLastOdo.getText().toString().trim());
+                        if (v >= 0) odometroIngresado = v;
                     } catch (Throwable ignored) {}
+                    prefs.edit()
+                        .putInt("oil_change_interval_km", nuevoIntervalo)
+                        .putInt("oil_last_service_odometer", odometroIngresado)
+                        .apply();
+                    int currentOdoNow = prefInt("odo_km_total", 0);
+                    int kmUsados = Math.max(0, currentOdoNow - odometroIngresado);
+                    int kmRestantes = nuevoIntervalo - kmUsados;
+                    @SuppressWarnings("unused")
+                    int porcentaje = Math.max(0, Math.min(100, (int) ((kmRestantes / (float) nuevoIntervalo) * 100)));
                     updateTelemetryBar();
                 }
             })
             .setNeutralButton("Aceite nuevo", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
-                    prefs.edit().putFloat("oil_last_service_odometer", odoKmTotal >= 0f ? odoKmTotal : 0f).apply();
+                    int currentOdoNow = prefInt("odo_km_total", 0);
+                    prefs.edit().putInt("oil_last_service_odometer", currentOdoNow).apply();
                     updateTelemetryBar();
+                    toast("Servicio registrado hoy a los " + String.format(ES, "%,d", currentOdoNow) + " km");
                 }
             })
             .setNegativeButton("Cancelar", null)
@@ -1864,6 +1895,8 @@ public class Main extends Activity {
     private void editText(final String key, String title, String def) {
         final android.widget.EditText et = new android.widget.EditText(this);
         et.setSingleLine(true);
+        et.setTextColor(TEXT);
+        et.setHintTextColor(MUTED);
         et.setText(prefs.getString(key, def));
         et.setSelection(et.getText().length());
         FrameLayout wrap = new FrameLayout(this);
@@ -1991,6 +2024,8 @@ public class Main extends Activity {
     private void ask(final String key, String title, String def, final Runnable next) {
         final android.widget.EditText et = new android.widget.EditText(this);
         et.setSingleLine(true);
+        et.setTextColor(TEXT);
+        et.setHintTextColor(MUTED);
         et.setText(prefs.getString(key, def));
         et.setSelection(et.getText().length());
         FrameLayout wrap = new FrameLayout(this);
