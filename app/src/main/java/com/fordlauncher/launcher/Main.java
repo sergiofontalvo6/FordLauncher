@@ -2032,8 +2032,8 @@ public class Main extends Activity {
         int pad = (int) (20 * s);
         wrap.setPadding(pad, pad / 2, pad, 0);
         wrap.addView(et);
-        new AlertDialog.Builder(this, dlg())
-            .setTitle(title)
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg());
+        b.setTitle(title)
             .setView(wrap)
             .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
@@ -2046,9 +2046,53 @@ public class Main extends Activity {
                     builtW = 0;
                     build(root.getWidth(), root.getHeight());
                 }
-            })
-            .setNegativeButton("Cancelar", null)
+            });
+        if ("gemini_api_key".equals(key)) {
+            b.setNeutralButton("Importar .txt", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) { pickApiKeyFile(); }
+            });
+        }
+        b.setNegativeButton("Cancelar", null)
             .show();
+    }
+
+    private static final int REQ_API_FILE = 43;
+
+    private void pickApiKeyFile() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            startActivityForResult(Intent.createChooser(i, "Selecciona tu clave de Gemini (.txt)"), REQ_API_FILE);
+        } catch (Throwable t) {
+            toast("No hay selector de archivos en esta pantalla");
+        }
+    }
+
+    private void importApiKeyFile(android.net.Uri uri) {
+        if (uri == null) { toast("No se eligió ningún archivo"); return; }
+        String raw = null;
+        try {
+            java.io.InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) throw new Exception("no stream");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            in.close();
+            raw = new String(bos.toByteArray(), "UTF-8");
+        } catch (Throwable t) {
+            toast("No se pudo leer el archivo");
+            return;
+        }
+        String key = raw == null ? "" : raw.trim();
+        if (key.length() > 0 && key.charAt(0) == '﻿') key = key.substring(1).trim(); // BOM U+FEFF de algunos .txt
+        if (key.length() == 0) { toast("El archivo está vacío"); return; }
+        int nl = key.indexOf('\n');
+        if (nl >= 0) key = key.substring(0, nl).trim(); // solo la primera línea: es la clave
+        prefs.edit().putString("gemini_api_key", key).apply();
+        toast("Clave importada desde el archivo");
+        if (settingsView != null) showSettings(settingsCat);
     }
 
     // ───────────────────────── universal: asistente, color, foto, CarPlay ─────────────────────────
@@ -2279,6 +2323,10 @@ public class Main extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_API_FILE) {
+            if (res == RESULT_OK && data != null) importApiKeyFile(data.getData());
+            return;
+        }
         if ((req == REQ_PHOTO_DAY || req == REQ_PHOTO_NIGHT) && res == RESULT_OK && data != null && data.getData() != null) {
             final Uri uri = data.getData();
             final boolean isDay = (req == REQ_PHOTO_DAY);
