@@ -58,6 +58,7 @@ public class EdgeVoiceSpeaker {
     private Future<?> synthTask;
     private volatile Socket socket;
     private volatile boolean speaking;
+    private volatile long generation;
     private volatile File mp3File;
 
     private final AudioManager.OnAudioFocusChangeListener focusListener = new AudioManager.OnAudioFocusChangeListener() {
@@ -76,19 +77,25 @@ public class EdgeVoiceSpeaker {
     public void speak(final String rawText) {
         if (rawText == null || rawText.trim().length() == 0) return;
         final String clean = CarVoiceSpeaker.clean(rawText);
-        stop();
+        stop(); // corta la sesión anterior (y su generación) si la hubiere
+        final long myGen = ++generation;
+        setSpeaking(true); // visible desde ya: el botón pasa a "Detener" durante la síntesis
         synthTask = synthPool.submit(new Runnable() {
             public void run() {
                 byte[] mp3;
                 try {
                     mp3 = synth(clean);
                 } catch (Throwable e) {
+                    if (myGen != generation) return; // cancelado por stop(): silencioso
                     Log.w(TAG, "Edge synth error: " + e);
+                    setSpeaking(false);
                     if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
                     return;
                 }
+                if (myGen != generation) return;
                 if (mp3 == null || mp3.length < 100) {
                     Log.w(TAG, "Edge synth audio vacio: " + (mp3 == null ? -1 : mp3.length) + " bytes (voz=" + voiceName + ")");
+                    setSpeaking(false);
                     if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
                     return;
                 }
@@ -100,10 +107,11 @@ public class EdgeVoiceSpeaker {
                     mp3File = f;
                 } catch (Throwable e) {
                     Log.w(TAG, "Edge mp3 write error: " + e);
+                    setSpeaking(false);
                     if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
                     return;
                 }
-                ui.post(new Runnable() { public void run() { play(); } });
+                ui.post(new Runnable() { public void run() { if (myGen == generation) play(); } });
             }
         });
     }
@@ -114,6 +122,7 @@ public class EdgeVoiceSpeaker {
             am.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
         } catch (Throwable ignored) {}
         try {
+            try { if (player != null) { player.release(); } } catch (Throwable ignored) {}
             player = new MediaPlayer();
             player.setAudioStreamType(AudioManager.STREAM_MUSIC);
             player.setDataSource(mp3File.getAbsolutePath());
@@ -156,6 +165,7 @@ public class EdgeVoiceSpeaker {
     }
 
     public void stop() {
+        generation++; // invalida síntesis pendientes y reproducciones en cola
         try { if (synthTask != null) { synthTask.cancel(true); synthTask = null; } } catch (Throwable ignored) {}
         try { if (socket != null) socket.close(); } catch (Throwable ignored) {}
         try { if (player != null) { player.stop(); player.release(); } } catch (Throwable ignored) {}
