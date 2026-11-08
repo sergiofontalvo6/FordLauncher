@@ -28,6 +28,7 @@ import javax.net.ssl.X509TrustManager;
  */
 public class Net {
     private static SSLSocketFactory factory;
+    private static final java.util.concurrent.ExecutorService POST_POOL = java.util.concurrent.Executors.newCachedThreadPool();
     static String initInfo = "sin iniciar";
 
     public static synchronized void init(Context c) {
@@ -177,8 +178,41 @@ public class Net {
     }
 
     public static byte[] postJson(String url, byte[] body, int timeoutMs) throws Exception {
+        // Intento 1: fábrica propia (IPv4 forzado + TLS 1.2, necesaria en head units).
+        // Intento 2: pila del sistema (respaldos cuando la fábrica se cuelga con
+        // ciertos hosts, p. ej. API 27 + Google). Cada intento acotado por timeoutMs.
+        try {
+            return timedPost(url, body, timeoutMs, true);
+        } catch (Exception first) {
+            try { android.util.Log.w("FordLauncher/Net", "postJson fábrica propia falló, reintento sistema: " + first); } catch (Throwable ignored) {}
+            return timedPost(url, body, timeoutMs, false);
+        }
+    }
+
+    private static byte[] timedPost(final String url, final byte[] body, final int timeoutMs, final boolean customFactory) throws Exception {
+        java.util.concurrent.Future<byte[]> fut = POST_POOL.submit(new java.util.concurrent.Callable<byte[]>() {
+            public byte[] call() throws Exception {
+                return doPost(url, body, timeoutMs, customFactory);
+            }
+        });
+        try {
+            return fut.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            try { fut.cancel(true); } catch (Throwable ignored) {}
+            throw new Exception("timeout " + timeoutMs + "ms");
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable c = e.getCause() != null ? e.getCause() : e;
+            if (c instanceof Exception) throw (Exception) c;
+            throw new Exception(String.valueOf(c));
+        } catch (java.util.concurrent.CancellationException e) {
+            throw new Exception("cancelado");
+        }
+    }
+
+    private static byte[] doPost(String url, byte[] body, int timeoutMs, boolean customFactory) throws Exception {
+        long t0 = System.currentTimeMillis();
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        if (c instanceof HttpsURLConnection && factory != null) {
+        if (customFactory && c instanceof HttpsURLConnection && factory != null) {
             ((HttpsURLConnection) c).setSSLSocketFactory(factory);
         }
         c.setInstanceFollowRedirects(false);
@@ -192,9 +226,13 @@ public class Net {
         c.setFixedLengthStreamingMode(body.length);
         try {
             java.io.OutputStream os = c.getOutputStream();
+            long t1 = System.currentTimeMillis();
             os.write(body);
             os.close();
+            long t2 = System.currentTimeMillis();
             int code = c.getResponseCode();
+            long t3 = System.currentTimeMillis();
+            try { android.util.Log.w("FordLauncher/Net", "postJson [" + (customFactory ? "custom" : "system") + "] connect=" + (t1 - t0) + "ms write=" + (t2 - t1) + "ms responseCode=" + (t3 - t2) + "ms code=" + code); } catch (Throwable ignored) {}
             if (code != 200) {
                 String extra = "";
                 try {

@@ -4,10 +4,12 @@ import android.content.Context;
 import android.media.AudioManager;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.util.Log;
 import java.util.Locale;
 
 /** Motor de voz con atenuacion de audio (Audio Ducking). */
 public class CarVoiceSpeaker {
+    private static final String TAG = "FordLauncher/Voz";
     public interface Listener {
         void onSpeaking(boolean speaking);
         void onError(String msg);
@@ -42,8 +44,10 @@ public class CarVoiceSpeaker {
                 public void onInit(int status) {
                     if (status == TextToSpeech.SUCCESS) {
                         int r = tts.setLanguage(new Locale("es", "ES"));
+                        Log.w(TAG, "TTS setLanguage es-ES -> " + r + " (OK=" + TextToSpeech.LANG_AVAILABLE + " MISSING=" + TextToSpeech.LANG_MISSING_DATA + " NOT_SUPPORTED=" + TextToSpeech.LANG_NOT_SUPPORTED + ")");
                         if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
-                            tts.setLanguage(Locale.getDefault());
+                            int d = tts.setLanguage(Locale.getDefault());
+                            Log.w(TAG, "TTS fallback default locale -> " + d);
                         }
                         try { tts.setSpeechRate(0.95f); } catch (Throwable ignored) {}
                         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
@@ -53,7 +57,10 @@ public class CarVoiceSpeaker {
                         });
                         ready = true;
                         if (pending != null) { String p = pending; pending = null; doSpeak(p); }
-                    } else if (listener != null) listener.onError("No se pudo iniciar la voz.");
+                    } else {
+                        Log.w(TAG, "TTS init failed, status=" + status);
+                        if (listener != null) listener.onError("No se pudo iniciar la voz.");
+                    }
                 }
             });
             return;
@@ -68,7 +75,8 @@ public class CarVoiceSpeaker {
         try {
             java.util.HashMap<String, String> m = new java.util.HashMap<String, String>();
             m.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "ford-ai");
-            tts.speak(clean, TextToSpeech.QUEUE_FLUSH, m);
+            int res = tts.speak(clean, TextToSpeech.QUEUE_FLUSH, m);
+            Log.w(TAG, "TTS speak -> " + res + " (SUCCESS=0 ERROR=-1)");
         } catch (Throwable e) {
             setSpeaking(false);
             abandon();

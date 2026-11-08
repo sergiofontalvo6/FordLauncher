@@ -1,14 +1,24 @@
 package com.fordlauncher.launcher.obd;
 
 import android.content.Context;
+import android.util.Log;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Cliente del diagnostico por IA (Google Gemini 1.5 Flash gratuito). */
 public class GeminiDiagnosticClient {
     public interface Callback { void onDone(String text, String error); }
 
-    private static final ExecutorService POOL = Executors.newSingleThreadExecutor();
+    // Cached (no single): un DNS/TCP colgado en API 27 ignora el timeout de
+    // HttpURLConnection; cada analyze debe poder terminar en su propio plazo.
+    private static final ExecutorService POOL = Executors.newCachedThreadPool();
+    private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
 
     static String apiKey(Context c) {
@@ -28,20 +38,51 @@ public class GeminiDiagnosticClient {
                     return;
                 }
                 try {
-                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + key;
+                    // Streaming (SSE): el primer token llega en segundos aunque la
+                    // generación total tarde más; se acumula por fragmentos.
+                    // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
+                    // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
+                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
                     String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta. Analiza estos datos OBD2 y codigos de falla: " + snap
                             + ". Explica en espanol en exactamente 3 puntos concretos, claros y breves (maximo 65 palabras en total): 1. Diagnostico exacto del problema. 2. Nivel de gravedad (Bajo/Medio/Alto). 3. Que revisar o reparar en el taller. No uses asteriscos, vinetas complejas ni tecnicismos confusos.";
                     StringBuilder b = new StringBuilder();
                     b.append("{\"contents\":[{\"parts\":[{\"text\":\"");
                     b.append(escape(prompt));
-                    b.append("\"}]}]}");
-                    byte[] out = com.fordlauncher.launcher.Net.postJson(url, b.toString().getBytes("UTF-8"), 8000);
-                    String resp = new String(out, "UTF-8");
-                    String text = extractText(resp);
+                    b.append("\"}]}]"); // cierra text, parte, parts y contenido
+                    b.append(",\"generationConfig\":{\"maxOutputTokens\":250}}");
+                    final byte[] body = b.toString().getBytes("UTF-8");
+                    final String reqUrl = url;
+                    // Plazo total: 2 intentos de 20 s (fábrica propia + sistema) en
+                    // Net.postJson. HttpURLConnection en API 27 puede ignorar el
+                    // timeout si DNS/TCP/TLS se cuelga; el Future lo corta igual.
+                    Future<String> fut = NET.submit(new Callable<String>() {
+                        public String call() throws Exception {
+                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, body, 20000);
+                            return extractSse(new String(out, "UTF-8"));
+                        }
+                    });
+                    String text;
+                    try {
+                        text = fut.get(45000, TimeUnit.MILLISECONDS);
+                    } catch (TimeoutException e) {
+                        try { fut.cancel(true); } catch (Throwable ignored) {}
+                        Log.w("FordLauncher/AI", "Gemini timeout 45s: " + e);
+                        if (callback != null) callback.onDone(null, ERR_CONN);
+                        return;
+                    } catch (CancellationException e) {
+                        return;
+                    } catch (ExecutionException e) {
+                        Throwable c = e.getCause() != null ? e.getCause() : e;
+                        Log.w("FordLauncher/AI", "Gemini error: " + c);
+                        if (callback != null) callback.onDone(null, ERR_CONN);
+                        return;
+                    }
                     if (text == null || text.length() == 0) {
+                        Log.w("FordLauncher/AI", "Gemini empty response");
                         if (callback != null) callback.onDone(null, "Gemini no devolvio texto. Revisa la clave API o tu conexion.");
                         return;
                     }
+                    Log.i("FordLauncher/AI", "Gemini OK (" + text.length() + " chars)");
                     if (callback != null) callback.onDone(text, null);
                 } catch (Throwable e) {
                     if (callback != null) callback.onDone(null, ERR_CONN);
@@ -60,6 +101,27 @@ public class GeminiDiagnosticClient {
             else o.append(c);
         }
         return o.toString();
+    }
+
+    /** Acumula el texto de una respuesta SSE (data: {...}) o JSON simple. */
+    static String extractSse(String full) {
+        if (full == null) return null;
+        String t = full.trim();
+        if (!t.startsWith("data:")) return extractText(full);
+        StringBuilder o = new StringBuilder();
+        int i = 0;
+        while (i < full.length()) {
+            int nl = full.indexOf('\n', i);
+            String line = nl < 0 ? full.substring(i) : full.substring(i, nl);
+            i = nl < 0 ? full.length() : nl + 1;
+            if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
+            if (!line.startsWith("data:")) continue;
+            String data = line.substring(5).trim();
+            if (data.length() == 0 || "[DONE]".equals(data)) continue;
+            String piece = extractText(data);
+            if (piece != null) o.append(piece);
+        }
+        return o.length() > 0 ? o.toString() : null;
     }
 
     static String extractText(String resp) {
