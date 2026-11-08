@@ -80,7 +80,7 @@ public class Updates {
                 String[] names = {"GitHub", "GitHub (raw)", "jsDelivr", "jsDelivr (http)"};
                 for (int i = 0; i <= JSON_URLS.length; i++) {
                     Release c = null;
-                    try { c = i == 0 ? fromApi() : fromJson(ctx, JSON_URLS[i - 1]); }
+                    try { c = i == 0 ? fromApi(ctx) : fromJson(ctx, JSON_URLS[i - 1]); }
                     catch (Throwable e) {
                         lastError = names[i] + ": " + e;
                         rep.append(names[i]).append(": ").append(shortErr(e)).append(" [").append(e.toString().replaceAll("[\\r\\n]+", " ")).append("]\n");
@@ -100,8 +100,16 @@ public class Updates {
         }).start();
     }
 
-    private static Release fromApi() throws Exception {
-        JSONObject o = new JSONObject(new String(Net.get("https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest", 10000), "UTF-8"));
+    private static Release fromApi(Context ctx) throws Exception {
+        java.util.Map<String, String> h = null;
+        try {
+            String tok = ctx.getSharedPreferences("launcher", 0).getString("gh_token", "").trim();
+            if (tok.length() > 0) {
+                h = new java.util.HashMap<String, String>();
+                h.put("Authorization", "token " + tok);
+            }
+        } catch (Throwable ignored) { }
+        JSONObject o = new JSONObject(new String(Net.get("https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest", 10000, h), "UTF-8"));
         Release r = new Release();
         r.version = clean(o.getString("tag_name"));
         r.notes = o.optString("body", "");

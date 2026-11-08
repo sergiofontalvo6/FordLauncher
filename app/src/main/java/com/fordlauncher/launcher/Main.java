@@ -3163,6 +3163,9 @@ public class Main extends Activity {
                 prefs.edit().putBoolean("auto_update", i == 1).apply(); showSettings(9);
             }});
         row(u, "Canal de actualizaciones", null, "GitHub Releases", null);
+        String ghTok = prefs.getString("gh_token", null);
+        row(u, "Token de GitHub (opcional)", "Sube el límite de comprobaciones si tu red es compartida", (ghTok == null || ghTok.trim().isEmpty()) ? "Sin token" : "Configurado",
+            edit("gh_token", "Token de GitHub (deja vacío para quitarlo)", ""));
         long last = prefs.getLong("upd_last", 0);
         row(u, "Buscar actualizaciones", last == 0 ? "Aún no se ha comprobado"
                 : "Última comprobación: " + new SimpleDateFormat("yyyy-MM-dd HH:mm", ES).format(new Date(last)), null,

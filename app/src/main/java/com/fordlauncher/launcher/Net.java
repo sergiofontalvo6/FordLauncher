@@ -122,21 +122,25 @@ public class Net {
     }
 
     public static byte[] get(String url, int timeoutMs) throws Exception {
+        return get(url, timeoutMs, null);
+    }
+
+    public static byte[] get(String url, int timeoutMs, final java.util.Map<String, String> extraHeaders) throws Exception {
         // Intento 1: fábrica propia (IPv4 forzado + TLS 1.2, necesaria en head units).
         // Intento 2: pila del sistema (respaldos cuando la fábrica se cuelga o el
         // handshake falla, p. ej. API 27 + ciertos hosts). Cada intento acotado.
         try {
-            return timedGet(url, timeoutMs, true);
+            return timedGet(url, timeoutMs, true, extraHeaders);
         } catch (Exception first) {
             try { android.util.Log.w("FordLauncher/Net", "get fábrica propia falló, reintento sistema: " + first); } catch (Throwable ignored) {}
-            return timedGet(url, timeoutMs, false);
+            return timedGet(url, timeoutMs, false, extraHeaders);
         }
     }
 
-    private static byte[] timedGet(final String url, final int timeoutMs, final boolean customFactory) throws Exception {
+    private static byte[] timedGet(final String url, final int timeoutMs, final boolean customFactory, final java.util.Map<String, String> extraHeaders) throws Exception {
         java.util.concurrent.Future<byte[]> fut = POST_POOL.submit(new java.util.concurrent.Callable<byte[]>() {
             public byte[] call() throws Exception {
-                return doGet(url, timeoutMs, customFactory);
+                return doGet(url, timeoutMs, customFactory, extraHeaders);
             }
         });
         try {
@@ -153,7 +157,7 @@ public class Net {
         }
     }
 
-    private static byte[] doGet(String url, int timeoutMs, boolean customFactory) throws Exception {
+    private static byte[] doGet(String url, int timeoutMs, boolean customFactory, java.util.Map<String, String> extraHeaders) throws Exception {
         String current = url;
         // GitHub API /releases/latest responde 302 a /releases/tag/vX: seguirlo a mano
         // (HttpURLConnection no siempre lo sigue en Android viejo / https->https distinto host).
@@ -168,6 +172,9 @@ public class Net {
             c.setReadTimeout(timeoutMs);
             c.setRequestProperty("User-Agent", "FordLauncher/2.1 (Android head unit launcher)");
             c.setRequestProperty("Accept", "application/vnd.github.v3+json, application/json, */*");
+            if (extraHeaders != null) for (java.util.Map.Entry<String, String> e : extraHeaders.entrySet()) {
+                c.setRequestProperty(e.getKey(), e.getValue());
+            }
             try {
                 int code = c.getResponseCode();
                 if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
@@ -304,20 +311,33 @@ public class Net {
         private Socket on(Socket s) { return on(s, null); }
         private Socket on(Socket s, String host) {
             if (s instanceof SSLSocket) {
-                
-                
-                try { // todos los cifrados que tenga el equipo (Android 4.x trae pocos activados)
-                    ((SSLSocket) s).setEnabledCipherSuites(((SSLSocket) s).getSupportedCipherSuites());
-                } catch (Throwable ignored) { }
+                // TLS de por defecto del equipo (cripto compatible con la mayoria de
+                // servidores; forzar listas propias rompe ciertos CDNs).
                 if (host != null) {
-                    try { s.getClass().getMethod("setHostname", String.class).invoke(s, host); } catch (Throwable ignored) { }   // SNI
-                    try { s.getClass().getMethod("setUseSessionTickets", boolean.class).invoke(s, true); } catch (Throwable ignored) { }
+                    boolean sniOk = false;
+                    // SNI oficial (API 17+): los CDN agregan este dato o cuelgan el handshake.
+                    if (android.os.Build.VERSION.SDK_INT >= 17) {
+                        try {
+                            javax.net.ssl.SSLParameters par = ((SSLSocket) s).getSSLParameters();
+                            par.setServerNames(java.util.Collections.singletonList(new javax.net.ssl.SNIHostName(host)));
+                            ((SSLSocket) s).setSSLParameters(par);
+                            sniOk = true;
+                        } catch (Throwable ignored) { }
+                    }
+                    if (!sniOk) {
+                        try { s.getClass().getMethod("setHostname", String.class).invoke(s, host); } catch (Throwable ignored) { }   // SNI por reflexion (API vieja)
+                        try { s.getClass().getMethod("setUseSessionTickets", boolean.class).invoke(s, true); } catch (Throwable ignored) { }
+                    }
                 }
+                // Solo asegurar TLS 1.2/1.3 (Android viejos lo traen apagado por defecto);
+                // nunca quitar los demás: forzar listas propias rompe algunos front-doors.
                 try {
                     String[] sup = ((SSLSocket) s).getSupportedProtocols();
-                    java.util.ArrayList<String> want = new java.util.ArrayList<String>();
-                    for (String p : sup) if (p.equals("TLSv1.2") || p.equals("TLSv1.3") || p.equals("TLSv1.1")) want.add(p);
-                    if (!want.isEmpty()) ((SSLSocket) s).setEnabledProtocols(want.toArray(new String[0]));
+                    java.util.ArrayList<String> want = new java.util.ArrayList<String>(java.util.Arrays.asList(sup));
+                    for (String p : new String[]{"TLSv1.3", "TLSv1.2", "TLSv1.1"}) {
+                        if (java.util.Arrays.asList(sup).contains(p) && !want.contains(p)) want.add(p);
+                    }
+                    ((SSLSocket) s).setEnabledProtocols(want.toArray(new String[0]));
                 } catch (Throwable ignored) { }
             }
             return s;
