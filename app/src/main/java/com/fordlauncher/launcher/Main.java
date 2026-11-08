@@ -122,6 +122,7 @@ public class Main extends Activity {
     private long telemLastMs;
     private float odoKmTotal = -1f;
     private float odoLastSavedKm = -1f;
+    private Location lastGpsLoc;
     private LiveMapView liveMap;
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
@@ -929,7 +930,6 @@ public class Main extends Activity {
         liveMap.setVisibility(View.VISIBLE);
         updateMapTag();
     }
-
     private void updateMapTag() {
         if (mapTagTv == null) return;
         boolean live = lastFix > 0;
@@ -985,7 +985,7 @@ public class Main extends Activity {
         bar.addView(row, new FrameLayout.LayoutParams(-1, -1));
 
         // a) Tacómetro RPM: etiqueta + valor grande + arco de color
-        LinearLayout rpm = teleSection(row, 1.4f, "RPM", null);
+        LinearLayout rpm = teleSection(row, 1.0f, "RPM", null);
         rpmText = tv("-- RPM", 22, TEXT, true);
         rpmText.setMaxLines(1);
         rpmText.setEllipsize(TextUtils.TruncateAt.END);
@@ -1007,7 +1007,7 @@ public class Main extends Activity {
         temp.addView(tempBar, tbp);
 
         // c) Consumo instantáneo
-        LinearLayout cons = teleSection(row, 1.1f, "CONSUMO", "speed");
+        LinearLayout cons = teleSection(row, 1.0f, "CONSUMO", "speed");
         consText = tv("-- L/h", 22, TEXT, true);
         consText.setMaxLines(1);
         consText.setEllipsize(TextUtils.TruncateAt.END);
@@ -1031,27 +1031,28 @@ public class Main extends Activity {
             public void onClick(View v) { oilDialog(); }
         });
 
-        // e) Cápsula unificada: iconos AA | CarPlay; el toque abre SOLO CarPlay.
+        // e) Cápsula unificada compacta: iconos AA | CarPlay; el toque abre SOLO CarPlay.
         LinearLayout capsule = new LinearLayout(this);
         capsule.setOrientation(LinearLayout.HORIZONTAL);
         capsule.setGravity(Gravity.CENTER);
         capsule.setBackground(round((BTN & 0x00FFFFFF) | 0xD0000000, 14));
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -1, 2.0f);
+        capsule.setPadding((int) (13 * s), 0, (int) (13 * s), 0);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -1);
         clp.leftMargin = (int) (12 * s);
         row.addView(capsule, clp);
         ImageView aaIc = new ImageView(this);
         try { aaIc.setImageDrawable(getResources().getDrawable(R.drawable.android_auto)); } catch (Throwable t) { aaIc.setImageResource(R.drawable.android_auto); }
         aaIc.setAlpha(0.9f);
-        capsule.addView(aaIc, new LinearLayout.LayoutParams((int) (22 * s), (int) (22 * s)));
+        capsule.addView(aaIc, new LinearLayout.LayoutParams((int) (28 * s), (int) (28 * s)));
         View sep = new View(this);
         sep.setBackgroundColor(BTN);
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Math.max(1, (int) s), (int) (30 * s));
-        slp.leftMargin = (int) (10 * s); slp.rightMargin = (int) (10 * s);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Math.max(1, (int) s), (int) (20 * s));
+        slp.leftMargin = (int) (8 * s); slp.rightMargin = (int) (8 * s);
         capsule.addView(sep, slp);
         ImageView cpIc = new ImageView(this);
         try { cpIc.setImageDrawable(getResources().getDrawable(R.drawable.carplay)); } catch (Throwable t) { cpIc.setImageResource(R.drawable.carplay); }
         cpIc.setAlpha(0.9f);
-        capsule.addView(cpIc, new LinearLayout.LayoutParams((int) (22 * s), (int) (22 * s)));
+        capsule.addView(cpIc, new LinearLayout.LayoutParams((int) (28 * s), (int) (28 * s)));
         capsule.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { openCarPlay(); }
         });
@@ -1097,8 +1098,13 @@ public class Main extends Activity {
         Float consKmL = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.CONSUMPTION) : null;
 
         // Odómetro propio: suma km recorridos con velocidad en el tiempo.
+        // Resincronización al reconectar: nunca bajar del valor persistido.
         long nowMs = System.currentTimeMillis();
         if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
+        if (getObdRepo().getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON) {
+            float persisted = prefInt("odo_km_total", 0);
+            if (persisted > odoKmTotal) odoKmTotal = persisted; // max(odoCpu, odoGuardado)
+        }
         if (speed != null && speed > 0f && telemLastMs > 0) {
             float dtH = (nowMs - telemLastMs) / 3600000f;
             if (dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
@@ -1150,7 +1156,12 @@ public class Main extends Activity {
         int interval = prefInt("oil_change_interval_km", 8000);
         int kmUsados = Math.max(0, currentOdo - lastOdo);
         int kmRestantes = Math.max(0, interval - kmUsados);
-        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes));
+        long diasUso = -1;
+        try {
+            long epoch = prefs.getLong("oil_service_date_epoch", 0L);
+            if (epoch > 0) diasUso = (System.currentTimeMillis() - epoch) / (1000L * 60L * 60L * 24L);
+        } catch (Throwable ignored) {}
+        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes) + (diasUso > 0 ? " · " + diasUso + " d" : ""));
         if (oilBar != null) {
             oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
             oilBar.setFillColor(zoneColor(interval > 0 ? kmRestantes / (float) interval : 1f));
@@ -1205,6 +1216,7 @@ public class Main extends Activity {
                     prefs.edit()
                         .putInt("oil_change_interval_km", interval)
                         .putInt("oil_last_service_odometer", lastOdo2)
+                        .putLong("oil_service_date_epoch", System.currentTimeMillis())
                         .apply();
                     updateOilWidgetUI();
                     updateTelemetryBar();
@@ -1213,7 +1225,7 @@ public class Main extends Activity {
             .setNeutralButton("Aceite nuevo", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
                     int currentOdo = prefInt("odo_km_total", 0);
-                    prefs.edit().putInt("oil_last_service_odometer", currentOdo).apply();
+                    prefs.edit().putInt("oil_last_service_odometer", currentOdo).putLong("oil_service_date_epoch", System.currentTimeMillis()).apply();
                     updateOilWidgetUI();
                     updateTelemetryBar();
                     toast("Servicio registrado hoy a los " + String.format(ES, "%,d", currentOdo) + " km");
@@ -1509,6 +1521,26 @@ public class Main extends Activity {
     private final LocationListener gpsListener = new LocationListener() {
         public void onLocationChanged(Location l) {
             lastFix = SystemClock.elapsedRealtime();
+            if (l != null) {
+                // Fallback de odómetro por GPS cuando OBD2 está desconectado.
+                try {
+                    boolean obdOn = getObdRepo().getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON;
+                    float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0f;
+                    if (!obdOn && kmh > 5f && lastGpsLoc != null) {
+                        float distM = l.distanceTo(lastGpsLoc);
+                        if (distM > 1f && distM < 5000f) {
+                            if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
+                            odoKmTotal += distM / 1000f;
+                            if (odoKmTotal - odoLastSavedKm > 0.5f) {
+                                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).apply();
+                                odoLastSavedKm = odoKmTotal;
+                            }
+                            updateOilWidgetUI();
+                        }
+                    }
+                    lastGpsLoc = l;
+                } catch (Throwable ignored) {}
+            }
             setGps(true, l.hasSpeed() ? l.getSpeed() * 3.6f : 0);
             feedMap(l);
         }
