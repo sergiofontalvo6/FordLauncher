@@ -1031,34 +1031,31 @@ public class Main extends Activity {
             public void onClick(View v) { oilDialog(); }
         });
 
-        // e) Botón dividido Android Auto / CarPlay
-        LinearLayout pill = new LinearLayout(this);
-        pill.setOrientation(LinearLayout.HORIZONTAL);
-        pill.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(0, -1, 2.0f);
-        plp.leftMargin = (int) (12 * s);
-        row.addView(pill, plp);
-        View aa = projButtonRes(R.drawable.android_auto, "Android Auto", RED, true);
-        aaBtnTv = (TextView) aa.getTag();
-        pill.addView(aa, new LinearLayout.LayoutParams(0, -1, 1f));
+        // e) Cápsula unificada: iconos AA | CarPlay; el toque abre SOLO CarPlay.
+        LinearLayout capsule = new LinearLayout(this);
+        capsule.setOrientation(LinearLayout.HORIZONTAL);
+        capsule.setGravity(Gravity.CENTER);
+        capsule.setBackground(round((BTN & 0x00FFFFFF) | 0xD0000000, 14));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -1, 2.0f);
+        clp.leftMargin = (int) (12 * s);
+        row.addView(capsule, clp);
+        ImageView aaIc = new ImageView(this);
+        try { aaIc.setImageDrawable(getResources().getDrawable(R.drawable.android_auto)); } catch (Throwable t) { aaIc.setImageResource(R.drawable.android_auto); }
+        aaIc.setAlpha(0.9f);
+        capsule.addView(aaIc, new LinearLayout.LayoutParams((int) (22 * s), (int) (22 * s)));
         View sep = new View(this);
         sep.setBackgroundColor(BTN);
-        pill.addView(sep, new LinearLayout.LayoutParams(Math.max(1, (int) s), -1));
-        View cp = projButtonRes(R.drawable.carplay, "CarPlay", BTN, false);
-        cpSubTv = (TextView) cp.getTag();
-        pill.addView(cp, new LinearLayout.LayoutParams(0, -1, 1f));
-        aaSubTv = aaBtnTv;
-
-        aa.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openAndroidAuto(); }
-        });
-        aa.setOnLongClickListener(new View.OnLongClickListener() {
-            public boolean onLongClick(View v) { chooseConnection(null); return true; }
-        });
-        cp.setOnClickListener(new View.OnClickListener() {
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Math.max(1, (int) s), (int) (30 * s));
+        slp.leftMargin = (int) (10 * s); slp.rightMargin = (int) (10 * s);
+        capsule.addView(sep, slp);
+        ImageView cpIc = new ImageView(this);
+        try { cpIc.setImageDrawable(getResources().getDrawable(R.drawable.carplay)); } catch (Throwable t) { cpIc.setImageResource(R.drawable.carplay); }
+        cpIc.setAlpha(0.9f);
+        capsule.addView(cpIc, new LinearLayout.LayoutParams((int) (22 * s), (int) (22 * s)));
+        capsule.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { openCarPlay(); }
         });
-        cp.setOnLongClickListener(new View.OnLongClickListener() {
+        capsule.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) { pickFor("carplay", "CarPlay"); return true; }
         });
 
@@ -1115,7 +1112,10 @@ public class Main extends Activity {
         if (rpmGauge != null) rpmGauge.setValue(rpm != null ? rpm : -1f);
         rpmText.setText(rpm != null ? String.format(ES, "%.0f RPM", rpm) : "-- RPM");
 
-        if (tempBar != null) tempBar.setFraction(coolant != null ? (coolant - 40f) / 85f : -1f);
+        if (tempBar != null) {
+            tempBar.setFraction(coolant != null ? (coolant - 40f) / 85f : -1f);
+            tempBar.setFillColor(coolant != null ? tempColor(coolant) : tempBar.fill);
+        }
         tempText.setText(coolant != null ? String.format(ES, "%.0f °C", coolant) : "-- °C");
         tempText.setTextColor(coolant != null && coolant >= 105f ? 0xFFF44336 : TEXT);
 
@@ -1134,16 +1134,27 @@ public class Main extends Activity {
             consFrac = l100 / 30f;
         }
         consText.setText(consTxt);
-        if (consBar != null) consBar.setFraction(consFrac);
+        if (consBar != null) {
+            consBar.setFraction(consFrac);
+            consBar.setFillColor(consFrac >= 0f ? zoneColor(consFrac) : consBar.fill);
+        }
 
-        int interval = prefInt("oil_change_interval_km", 8000);
-        int lastSvc = prefInt("oil_last_service_odometer", 0);
+        updateOilWidgetUI();
+    }
+
+    /** Widget de aceite: sincroniza texto + barra + color (recálculo exacto). */
+    private void updateOilWidgetUI() {
+        if (oilText == null) return;
         int currentOdo = prefInt("odo_km_total", 0);
-        int kmUsados = Math.max(0, currentOdo - lastSvc);
-        int kmRestantes = interval - kmUsados;
-        oilText.setText(kmRestantes >= 0 ? "Aceite: " + String.format(ES, "%,d km", kmRestantes) : "¡Cambio de aceite!");
-        oilText.setTextColor(kmRestantes < 1000 ? 0xFFD29922 : TEXT);
-        if (oilBar != null) oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
+        int lastOdo = prefInt("oil_last_service_odometer", 0);
+        int interval = prefInt("oil_change_interval_km", 8000);
+        int kmUsados = Math.max(0, currentOdo - lastOdo);
+        int kmRestantes = Math.max(0, interval - kmUsados);
+        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes));
+        if (oilBar != null) {
+            oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
+            oilBar.setFillColor(zoneColor(interval > 0 ? kmRestantes / (float) interval : 1f));
+        }
     }
 
     /** Lee un int tolerando claves guardadas como float (instalaciones previas). */
@@ -1155,7 +1166,6 @@ public class Main extends Activity {
     }
 
     private void oilDialog() {
-        final int currentOdo = prefInt("odo_km_total", 0);
         final int lastOdo = prefInt("oil_last_service_odometer", 0);
 
         final android.widget.EditText etInterval = new android.widget.EditText(this);
@@ -1175,11 +1185,8 @@ public class Main extends Activity {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (18 * s);
-        col.setPadding(pad, pad, pad, 0);
-        TextView info = tv("Odómetro actual del auto: " + String.format(ES, "%,d", currentOdo) + " km", 13, MUTED, false);
-        col.addView(info);
+        col.setPadding(pad, pad, pad, pad);
         TextView l1 = tv("Intervalo (km)", 13, MUTED, false);
-        l1.setPadding(0, (int) (12 * s), 0, 0);
         col.addView(l1);
         col.addView(etInterval, new LinearLayout.LayoutParams(-1, -2));
         TextView l2 = tv("Odómetro del último cambio (km)", 13, MUTED, false);
@@ -1191,41 +1198,68 @@ public class Main extends Activity {
             .setView(col)
             .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
-                    int nuevoIntervalo = prefInt("oil_change_interval_km", 8000);
-                    int odometroIngresado = prefInt("oil_last_service_odometer", 0);
-                    try {
-                        int v = Integer.parseInt(etInterval.getText().toString().trim());
-                        if (v > 0) nuevoIntervalo = v;
-                    } catch (Throwable ignored) {}
-                    try {
-                        int v = Integer.parseInt(etLastOdo.getText().toString().trim());
-                        if (v >= 0) odometroIngresado = v;
-                    } catch (Throwable ignored) {}
+                    int interval = prefInt("oil_change_interval_km", 8000);
+                    int lastOdo2 = prefInt("oil_last_service_odometer", 0);
+                    try { interval = Integer.parseInt(etInterval.getText().toString().trim()); } catch (Throwable ignored) {}
+                    try { lastOdo2 = Integer.parseInt(etLastOdo.getText().toString().trim()); } catch (Throwable ignored) {}
                     prefs.edit()
-                        .putInt("oil_change_interval_km", nuevoIntervalo)
-                        .putInt("oil_last_service_odometer", odometroIngresado)
+                        .putInt("oil_change_interval_km", interval)
+                        .putInt("oil_last_service_odometer", lastOdo2)
                         .apply();
-                    int currentOdoNow = prefInt("odo_km_total", 0);
-                    int kmUsados = Math.max(0, currentOdoNow - odometroIngresado);
-                    int kmRestantes = nuevoIntervalo - kmUsados;
-                    @SuppressWarnings("unused")
-                    int porcentaje = Math.max(0, Math.min(100, (int) ((kmRestantes / (float) nuevoIntervalo) * 100)));
+                    updateOilWidgetUI();
                     updateTelemetryBar();
                 }
             })
             .setNeutralButton("Aceite nuevo", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
-                    int currentOdoNow = prefInt("odo_km_total", 0);
-                    prefs.edit().putInt("oil_last_service_odometer", currentOdoNow).apply();
+                    int currentOdo = prefInt("odo_km_total", 0);
+                    prefs.edit().putInt("oil_last_service_odometer", currentOdo).apply();
+                    updateOilWidgetUI();
                     updateTelemetryBar();
-                    toast("Servicio registrado hoy a los " + String.format(ES, "%,d", currentOdoNow) + " km");
+                    toast("Servicio registrado hoy a los " + String.format(ES, "%,d", currentOdo) + " km");
                 }
             })
             .setNegativeButton("Cancelar", null)
             .show();
     }
 
-    /** Barra del tacómetro: verde → amarillo → rojo según RPM (0-6500). */
+    /** Interpolación de color verde→naranja→rojo (suave, como ArgbEvaluator). */
+    private static final int C_GREEN = 0xFF4CAF50, C_ORANGE = 0xFFFF9800, C_RED_ZONE = 0xFFF44336;
+
+    private static int lerpColor(int a, int b, float t) {
+        if (t <= 0f) return a;
+        if (t >= 1f) return b;
+        try {
+            return ((Integer) new android.animation.ArgbEvaluator().evaluate(t, a, b)).intValue();
+        } catch (Throwable ignored) { }
+        int ar = (a >>> 24) & 0xFF, ag = (a >>> 16) & 0xFF, ab = (a >>> 8) & 0xFF, aa = a & 0xFF;
+        int br = (b >>> 24) & 0xFF, bg = (b >>> 16) & 0xFF, bb = (b >>> 8) & 0xFF, ba = b & 0xFF;
+        return ((ar + (int) ((br - ar) * t)) << 24)
+                | ((ag + (int) ((bg - ag) * t)) << 16)
+                | ((ab + (int) ((bb - ab) * t)) << 8)
+                | (aa + (int) ((ba - aa) * t));
+    }
+
+    /** Zona por fracción 0..1: 100-40% verde, 40-15% verde→naranja, 15-0% naranja→rojo. */
+    private static int zoneColor(float frac) {
+        if (frac <= 0.15f) return C_RED_ZONE;
+        if (frac <= 0.40f) return lerpColor(C_ORANGE, C_RED_ZONE, Math.max(0f, Math.min(1f, (frac - 0.15f) / 0.25f)));
+        return lerpColor(C_GREEN, C_ORANGE, Math.max(0f, Math.min(1f, (1f - frac) / 0.60f)));
+    }
+
+    private static int rpmColor(float rpm) {
+        if (rpm <= 3500f) return C_GREEN;
+        if (rpm < 5200f) return lerpColor(C_GREEN, C_ORANGE, (rpm - 3500f) / 1700f);
+        return lerpColor(C_ORANGE, C_RED_ZONE, Math.min(1f, (rpm - 5200f) / 1300f));
+    }
+
+    private static int tempColor(float t) {
+        if (t < 92f) return C_GREEN;
+        if (t < 105f) return lerpColor(C_GREEN, C_ORANGE, (t - 92f) / 12f);
+        return C_RED_ZONE;
+    }
+
+    /** Barra del tacómetro: relleno de color según RPM (0-6500). */
     private class RpmGauge extends View {
         private float value = -1f;
         RpmGauge() { super(Main.this); }
@@ -1241,24 +1275,20 @@ public class Main extends Activity {
             c.drawRoundRect(0, 0, w, h, r, r, track);
             if (value >= 0) {
                 float frac = Math.max(0f, Math.min(1f, value / 6500f));
-                float fw = w * frac;
-                int n = Math.max(1, Math.round(fw / (6f * s)));
-                int[] cols = {0xFF43A047, 0xFFFB8C00, 0xFFF44336};
-                for (int i = 0; i < n; i++) {
-                    float f0 = i / (float) n, f1 = (i + 1) / (float) n;
-                    android.graphics.Paint p = new android.graphics.Paint();
-                    p.setColor(f1 <= 0.4f ? cols[0] : f1 <= 0.75f ? cols[1] : cols[2]);
-                    c.drawRect(w * f0, 0, w * f1, h, p);
-                }
+                android.graphics.Paint p = new android.graphics.Paint();
+                p.setColor(rpmColor(value));
+                c.drawRoundRect(0, 0, w * frac, h, r, r, p);
             }
         }
     }
 
-    /** Barra de progreso simple (acento), -1 = sin datos. */
+    /** Barra de progreso simple (color por zona), -1 = sin datos. */
     private class MiniBar extends View {
         private float frac = -1f;
+        private int fill = C_ORANGE;
         MiniBar() { super(Main.this); }
         void setFraction(float f) { frac = f; invalidate(); }
+        void setFillColor(int c) { fill = c; invalidate(); }
         @Override protected void onDraw(android.graphics.Canvas c) {
             super.onDraw(c);
             float w = getWidth(), h = getHeight();
@@ -1269,7 +1299,7 @@ public class Main extends Activity {
             if (frac >= 0f) {
                 float fw = w * Math.max(0f, Math.min(1f, frac));
                 android.graphics.Paint p = new android.graphics.Paint();
-                p.setColor(RED);
+                p.setColor(fill);
                 c.drawRoundRect(0, 0, fw, h, h / 2f, h / 2f, p);
             }
         }
