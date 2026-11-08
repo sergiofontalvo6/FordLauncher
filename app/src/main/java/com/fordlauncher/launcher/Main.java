@@ -26,6 +26,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.SystemClock;
+import android.speech.tts.TextToSpeech;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -496,6 +497,7 @@ public class Main extends Activity {
         }
         h.removeCallbacks(btTicker);
         try { if (mediaWatcher != null) mediaWatcher.stop(); } catch (Throwable ignored) { }
+        try { closePrefTts(); } catch (Throwable ignored) {}
         try { if (workshop != null) workshop.onDestroy(); } catch (Throwable ignored) {}
         workshop = null;
         try { if (parked != null) parked.onDestroy(); } catch (Throwable ignored) { }
@@ -2063,8 +2065,8 @@ public class Main extends Activity {
 
     interface IntCb { void on(int i); }
 
-    static final String[] CAT_NAMES = {"Volver al inicio", "Tu vehículo", "Apariencia", "Conexión", "Accesos y apps", "Mapa y clima", "Música", "Sistema", "Acerca de"};
-    static final String[] CAT_ICONS = {"arrow_back", "directions_car", "palette", "usb", "apps", "map", "music_note", "tune", "info"};
+    static final String[] CAT_NAMES = {"Volver al inicio", "Tu vehículo", "Apariencia", "Conexión", "Accesos y apps", "Mapa y clima", "Música", "Sistema", "Ajustes IA", "Acerca de"};
+    static final String[] CAT_ICONS = {"arrow_back", "directions_car", "palette", "usb", "apps", "map", "music_note", "tune", "android", "info"};
 
     private void closeSettings() {
         settingsCat = -1;
@@ -2151,7 +2153,8 @@ public class Main extends Activity {
             case 5: catMapWeather(body); break;
             case 6: catMusic(body); break;
             case 7: catSystem(body); break;
-            case 8: catAbout(body); break;
+            case 8: catAi(body); break;
+            case 9: catAbout(body); break;
         }
     }
 
@@ -2321,14 +2324,133 @@ public class Main extends Activity {
             new IntCb() { public void on(int i) {
                 prefs.edit().putString("parked_mode_type", i == 1 ? "image" : "clock").apply(); showSettings(2);
             }});
-        LinearLayout ai = section(body, "Diagnóstico inteligente");
-        String apiKey = prefs.getString("gemini_api_key", "");
-        row(ai, "Clave API de Gemini", "Diagnóstico con IA en las pestañas Salud y Códigos (gratis en Google AI Studio)", (apiKey == null || apiKey.trim().length() == 0) ? "Sin clave" : "Configurada",
-            edit("gemini_api_key", "Clave API de Gemini", ""));
-        toggle(ai, "Leer diagnóstico en voz alta", "Lee automáticamente la respuesta de la IA al terminar de analizar", prefs.getBoolean("tts_auto_read", true), new IntCb() { public void on(int i) {
-            prefs.edit().putBoolean("tts_auto_read", i == 1).apply(); showSettings(2);
-        }});
     }
+
+    private void catAi(LinearLayout body) {
+        LinearLayout c = section(body, "Diagnóstico IA");
+        String apiKey = prefs.getString("gemini_api_key", "");
+        row(c, "Clave API de Gemini", "Diagnóstico con IA en las pestañas Salud y Códigos (gratis en Google AI Studio)", (apiKey == null || apiKey.trim().length() == 0) ? "Sin clave" : "Configurada",
+            edit("gemini_api_key", "Clave API de Gemini", ""));
+        toggle(c, "Leer diagnóstico en voz alta", "Lee automáticamente la respuesta de la IA al terminar de analizar", prefs.getBoolean("tts_auto_read", true), new IntCb() { public void on(int i) {
+            prefs.edit().putBoolean("tts_auto_read", i == 1).apply(); showSettings(8);
+        }});
+        LinearLayout v = section(body, "Voz");
+        String eng = prefs.getString("tts_engine", null);
+        row(v, "Motor de voz", "Qué motor lee el diagnóstico", (eng == null || eng.length() == 0) ? "Automático (sistema)" : eng,
+            new Runnable() { public void run() { pickTtsEngine(); } });
+        String vname = prefs.getString("tts_voice", null);
+        row(v, "Voz", "La voz concreta que lee (idioma, tono)", (vname == null || vname.length() == 0) ? "Automática (español)" : vname,
+            new Runnable() { public void run() { pickTtsVoice(); } });
+        row(v, "Instalar / importar voces", "Descarga voces en español u otros idiomas", "Instalar",
+            new Runnable() { public void run() { installTtsVoices(); } });
+    }
+
+    private void pickTtsEngine() {
+        openTts(new TextToSpeech.OnInitListener() {
+            public void onInit(int status) {
+                if (status != TextToSpeech.SUCCESS) { toast("No se pudo iniciar la voz"); return; }
+                java.util.List<android.speech.tts.TextToSpeech.EngineInfo> engines = null;
+                try { engines = getPrefsTts().getEngines(); } catch (Throwable ignored) {}
+                if (engines == null || engines.isEmpty()) { toast("No hay motores de voz instalados"); return; }
+                final String[] names = new String[engines.size() + 1];
+                final String[] labels = new String[engines.size() + 1];
+                names[0] = null; labels[0] = "Automático (la del sistema)";
+                for (int i = 0; i < engines.size(); i++) {
+                    names[i + 1] = engines.get(i).name;
+                    String lab = null;
+                    try { lab = engines.get(i).label; } catch (Throwable ignored) {}
+                    labels[i + 1] = lab != null ? lab : engines.get(i).name;
+                }
+                new AlertDialog.Builder(Main.this, dlg())
+                    .setTitle("Motor de voz")
+                    .setItems(labels, new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int w) {
+                            String chosen = names[w];
+                            if (chosen == null) prefs.edit().remove("tts_engine").remove("tts_voice").apply();
+                            else prefs.edit().putString("tts_engine", chosen).remove("tts_voice").apply();
+                            finishTts();
+                            showSettings(8);
+                        }
+                    })
+                    .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
+                    .show();
+            }
+        });
+    }
+
+    private void pickTtsVoice() {
+        openTts(new TextToSpeech.OnInitListener() {
+            public void onInit(int status) {
+                if (status != TextToSpeech.SUCCESS) { toast("No se pudo iniciar la voz"); return; }
+                if (SDK < 21) { toast("Voces seleccionables desde Android 5"); return; }
+                java.util.Set<android.speech.tts.Voice> voices = null;
+                try { voices = getPrefsTts().getVoices(); } catch (Throwable ignored) {}
+                if (voices == null || voices.isEmpty()) {
+                    new AlertDialog.Builder(Main.this, dlg())
+                        .setTitle("Voz")
+                        .setMessage("No hay voces instaladas todavía. Toca «Instalar / importar voces» y descarga una (la de español se baja sola al escuchar).")
+                        .setPositiveButton("Instalar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); installTtsVoices(); } })
+                        .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
+                        .show();
+                    return;
+                }
+                final String[] names = new String[voices.size() + 1];
+                final String[] labels = new String[voices.size() + 1];
+                names[0] = null; labels[0] = "Automática (español)";
+                java.util.List<android.speech.tts.Voice> list = new java.util.ArrayList<android.speech.tts.Voice>(voices);
+                for (int i = 0; i < list.size(); i++) {
+                    android.speech.tts.Voice voice = list.get(i);
+                    names[i + 1] = voice.getName();
+                    String loc = null;
+                    try { loc = voice.getLocale().toLanguageTag(); } catch (Throwable ignored) { loc = voice.getLocale().getLanguage(); }
+                    labels[i + 1] = loc + " — " + voice.getName();
+                }
+                new AlertDialog.Builder(Main.this, dlg())
+                    .setTitle("Voz")
+                    .setItems(labels, new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int w) {
+                            String chosen = names[w];
+                            if (chosen == null) prefs.edit().remove("tts_voice").apply();
+                            else prefs.edit().putString("tts_voice", chosen).apply();
+                            finishTts();
+                            showSettings(8);
+                        }
+                    })
+                    .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
+                    .show();
+            }
+        });
+    }
+
+    private void installTtsVoices() {
+        String action = "android.speech.tts.engine.INSTALL_TTS_DATA";
+        try {
+            startActivity(new Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Throwable t) {
+            try { startActivity(new Intent(action)); }
+            catch (Throwable t2) { toast("Este equipo no trae instalador de voces"); }
+        }
+    }
+
+    private TextToSpeech prefTts;
+    private TextToSpeech getPrefsTts() { return prefTts; }
+
+    private void openTts(TextToSpeech.OnInitListener listener) {
+        closePrefTts();
+        String eng = prefs.getString("tts_engine", null);
+        try {
+            prefTts = (eng != null && eng.length() > 0) ? new TextToSpeech(this, listener, eng) : new TextToSpeech(this, listener);
+        } catch (Throwable t) {
+            try { prefTts = new TextToSpeech(this, listener); } catch (Throwable t2) { toast("No se pudo iniciar la voz"); }
+        }
+    }
+
+    private void closePrefTts() {
+        try { if (prefTts != null) { prefTts.shutdown(); } } catch (Throwable ignored) {}
+        prefTts = null;
+    }
+
+    private void finishTts() { closePrefTts(); }
 
     private void catConnection(LinearLayout body) {
         LinearLayout c = section(body, "Celular");
@@ -2518,7 +2640,7 @@ public class Main extends Activity {
         if (fd) row(u, "Instalado desde F-Droid", "Las actualizaciones llegan por la app de F-Droid", null, null);
         toggle(u, "Comprobar actualizaciones automáticamente", "Al abrir Ford Launcher con internet, una vez al día",
             prefs.getBoolean("auto_update", !fd), new IntCb() { public void on(int i) {
-                prefs.edit().putBoolean("auto_update", i == 1).apply(); showSettings(8);
+                prefs.edit().putBoolean("auto_update", i == 1).apply(); showSettings(9);
             }});
         row(u, "Canal de actualizaciones", null, "GitHub Releases", null);
         long last = prefs.getLong("upd_last", 0);
@@ -2577,7 +2699,7 @@ public class Main extends Activity {
             public void onResult(final Updates.Release r, final String err) {
                 h.post(new Runnable() { public void run() {
                     updBusy = false;
-                    if (settingsView != null && settingsCat == 8) showSettings(8);
+                    if (settingsView != null && settingsCat == 9) showSettings(9);
                     if (r != null) {
                         if (manual || !r.version.equals(prefs.getString("upd_skip", ""))) updateDialog(r);
                     } else if (manual) {

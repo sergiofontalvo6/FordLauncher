@@ -17,6 +17,8 @@ public class CarVoiceSpeaker {
 
     private final Context ctx;
     private final AudioManager am;
+    private final String prefEngine;
+    private final String prefVoice;
     private TextToSpeech tts;
     private boolean ready;
     private boolean speaking;
@@ -30,6 +32,14 @@ public class CarVoiceSpeaker {
     public CarVoiceSpeaker(Context c) {
         ctx = c.getApplicationContext();
         am = (AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
+        String eng = null, voi = null;
+        try {
+            android.content.SharedPreferences p = ctx.getSharedPreferences("launcher", 0);
+            eng = p.getString("tts_engine", null);
+            voi = p.getString("tts_voice", null);
+        } catch (Throwable ignored) {}
+        prefEngine = (eng != null && eng.length() > 0) ? eng : null;
+        prefVoice = (voi != null && voi.length() > 0) ? voi : null;
     }
 
     public void setListener(Listener l) { listener = l; }
@@ -40,7 +50,7 @@ public class CarVoiceSpeaker {
         final String clean = clean(rawText);
         if (tts == null) {
             pending = clean;
-            tts = new TextToSpeech(ctx, new TextToSpeech.OnInitListener() {
+            TextToSpeech.OnInitListener init = new TextToSpeech.OnInitListener() {
                 public void onInit(int status) {
                     if (status == TextToSpeech.SUCCESS) {
                         int r = tts.setLanguage(new Locale("es", "ES"));
@@ -49,6 +59,18 @@ public class CarVoiceSpeaker {
                             int d = tts.setLanguage(Locale.getDefault());
                             Log.w(TAG, "TTS fallback default locale -> " + d);
                         }
+                        try {
+                            if (prefVoice != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                                java.util.Set<android.speech.tts.Voice> voices = tts.getVoices();
+                                if (voices != null) for (android.speech.tts.Voice voice : voices) {
+                                    if (prefVoice.equals(voice.getName())) {
+                                        int vr = tts.setVoice(voice);
+                                        Log.w(TAG, "TTS setVoice " + prefVoice + " -> " + vr + " (SUCCESS=0)");
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (Throwable t) { Log.w(TAG, "TTS setVoice error: " + t); }
                         try { tts.setSpeechRate(0.95f); } catch (Throwable ignored) {}
                         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                             public void onStart(String id) { setSpeaking(true); }
@@ -62,7 +84,12 @@ public class CarVoiceSpeaker {
                         if (listener != null) listener.onError("No se pudo iniciar la voz.");
                     }
                 }
-            });
+            };
+            try {
+                tts = (prefEngine != null) ? new TextToSpeech(ctx, init, prefEngine) : new TextToSpeech(ctx, init);
+            } catch (Throwable t) {
+                try { tts = new TextToSpeech(ctx, init); } catch (Throwable t2) { if (listener != null) listener.onError("No se pudo iniciar la voz."); }
+            }
             return;
         }
         if (!ready) { pending = clean; return; }
