@@ -2,6 +2,8 @@ package com.fordlauncher.launcher;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.DatePickerDialog;
+import android.widget.DatePicker;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -1198,11 +1200,30 @@ public class Main extends Activity {
         etDate.setTextColor(TEXT);
         etDate.setHintTextColor(MUTED);
         etDate.setHint("dd/MM/yyyy");
-        long epochSaved = 0L;
-        try { epochSaved = prefs.getLong("oil_service_date_epoch", 0L); } catch (Throwable ignored) { }
-        if (epochSaved > 0) {
-            try { etDate.setText(new SimpleDateFormat("dd/MM/yyyy", ES).format(new Date(epochSaved))); } catch (Throwable ignored) { }
+        final long epochSaved0 = prefs.getLong("oil_service_date_epoch", 0L);
+        if (epochSaved0 > 0) {
+            try { etDate.setText(new SimpleDateFormat("dd/MM/yyyy", ES).format(new Date(epochSaved0))); } catch (Throwable ignored) { }
         }
+        etDate.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                final java.util.Calendar c = java.util.Calendar.getInstance();
+                if (epochSaved0 > 0) c.setTime(new Date(epochSaved0));
+                new DatePickerDialog(Main.this, dlg(), new DatePickerDialog.OnDateSetListener() {
+                    public void onDateSet(DatePicker view, int year, int month, int day) {
+                        c.set(year, month, day);
+                        etDate.setText(new SimpleDateFormat("dd/MM/yyyy", ES).format(c.getTime()));
+                    }
+                }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH), c.get(java.util.Calendar.DAY_OF_MONTH)).show();
+            }
+        });
+
+        final android.widget.EditText etType = new android.widget.EditText(this);
+        etType.setSingleLine(true);
+        etType.setTextColor(TEXT);
+        etType.setHintTextColor(MUTED);
+        etType.setHint("Ej.: 5W-30 sintético");
+        String oilType = prefs.getString("oil_type", "");
+        etType.setText(oilType != null ? oilType : "");
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -1219,6 +1240,10 @@ public class Main extends Activity {
         l3.setPadding(0, (int) (10 * s), 0, 0);
         col.addView(l3);
         col.addView(etDate, new LinearLayout.LayoutParams(-1, -2));
+        TextView l4 = tv("Tipo de aceite (SAE)", 13, MUTED, false);
+        l4.setPadding(0, (int) (10 * s), 0, 0);
+        col.addView(l4);
+        col.addView(etType, new LinearLayout.LayoutParams(-1, -2));
         new AlertDialog.Builder(this, dlg())
             .setTitle("Control de aceite")
             .setView(col)
@@ -1238,6 +1263,7 @@ public class Main extends Activity {
                     prefs.edit()
                         .putInt("oil_change_interval_km", interval)
                         .putInt("oil_last_service_odometer", lastOdo2)
+                        .putString("oil_type", etType.getText().toString().trim())
                         .putLong("oil_service_date_epoch", epoch > 0 ? epoch : epochPrev)
                         .apply();
                     updateOilWidgetUI();
