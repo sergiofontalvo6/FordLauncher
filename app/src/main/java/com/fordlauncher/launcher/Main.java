@@ -135,6 +135,11 @@ public class Main extends Activity {
     private LocationManager lm;
     private long lastFix;
     private boolean installing;
+    private ParkedModeManager parked;
+    private volatile float parkGpsKmh;
+    float parkedScale() { return s; }
+    float lastGpsKmh() { return parkGpsKmh; }
+    Bitmap loadParkedImage() { return loadWallpaperForCurrentMode(); }
 
     // ───────────────────────── ciclo de vida ─────────────────────────
 
@@ -145,6 +150,7 @@ public class Main extends Activity {
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setBackgroundDrawable(new ColorDrawable(BG));
         prefs = getSharedPreferences("launcher", MODE_PRIVATE);
+        try { parked = new ParkedModeManager(this); } catch (Throwable ignored) {}
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
         migrateOrSetup();
         IntentFilter headlightFilter = new IntentFilter();
@@ -489,6 +495,7 @@ public class Main extends Activity {
         }
         h.removeCallbacks(btTicker);
         try { if (mediaWatcher != null) mediaWatcher.stop(); } catch (Throwable ignored) { }
+        try { if (parked != null) parked.onDestroy(); } catch (Throwable ignored) { }
         super.onDestroy();
     }
 
@@ -513,6 +520,7 @@ public class Main extends Activity {
         h.removeCallbacks(progressTick);
         h.post(progressTick);
         applyAaNotif(NotifArt.lastArt, NotifArt.lastTexts);
+        try { if (parked != null) parked.onResume(); } catch (Throwable ignored) {}
     }
 
     /** Android 6+: respuesta a la solicitud de permisos. */
@@ -529,6 +537,18 @@ public class Main extends Activity {
         stopGps();
         h.removeCallbacks(ticker);
         h.removeCallbacks(progressTick);
+        try { if (parked != null) parked.onPause(); } catch (Throwable ignored) {}
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        // Modo estacionado: un toque lo quita y consume el evento; si no, reinicia el temporizador.
+        try {
+            if (parked != null && (parked.isShowing() || parked.isEnabled())) {
+                if (parked.dispatchTouch(ev)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return super.dispatchTouchEvent(ev);
     }
 
     @Override
@@ -665,6 +685,8 @@ public class Main extends Activity {
         buildAaCard();
         buildAudioCard();
         buildDock();
+
+        try { if (parked != null) parked.attach(root); } catch (Throwable ignored) {}
 
         drawer = null;
         settingsView = null;
@@ -889,6 +911,7 @@ public class Main extends Activity {
         if (l != null) { wLat = l.getLatitude(); wLon = l.getLongitude(); }
         if (liveMap == null || l == null) return;
         float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0;
+        parkGpsKmh = kmh;
         liveMap.setPosition(l.getLatitude(), l.getLongitude(), l.hasBearing() && kmh > 4 ? l.getBearing() : Float.NaN, kmh);
         liveMap.setVisibility(View.VISIBLE);
         updateMapTag();
@@ -1167,6 +1190,7 @@ public class Main extends Activity {
     }
 
     private void setGps(boolean ok, float kmh) {
+        parkGpsKmh = ok ? kmh : 0f;
         if (speedTv == null) return;
         if (!ok) lastFix = 0;
         speedTv.setText(ok ? String.valueOf(Math.round(kmh < 2 ? 0 : kmh)) : "--");
@@ -2281,6 +2305,15 @@ public class Main extends Activity {
         segmented(h, "Formato de hora", null, new String[]{"Auto", "12 h", "24 h"}, "12".equals(ck) ? 1 : "24".equals(ck) ? 2 : 0,
             new IntCb() { public void on(int i) {
                 prefs.edit().putString("clock", i == 1 ? "12" : i == 2 ? "24" : "auto").apply(); updateClock(); showSettings(2);
+            }});
+        LinearLayout p = section(body, "Modo estacionado");
+        toggle(p, "Modo estacionado", "Tras 5 minutos sin tocar el inicio (y sin ir en movimiento) se ve un reloj grande o tu imagen. Un toque lo quita.", prefs.getBoolean("parked_mode_enabled", false), new IntCb() { public void on(int i) {
+            prefs.edit().putBoolean("parked_mode_enabled", i == 1).apply(); showSettings(2);
+        }});
+        String pt = prefs.getString("parked_mode_type", "clock");
+        segmented(p, "Imagen", "Reloj grande o la foto de tu auto", new String[]{"Reloj", "Tu imagen"}, "image".equals(pt) ? 1 : 0,
+            new IntCb() { public void on(int i) {
+                prefs.edit().putString("parked_mode_type", i == 1 ? "image" : "clock").apply(); showSettings(2);
             }});
     }
 

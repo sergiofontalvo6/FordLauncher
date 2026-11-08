@@ -10,7 +10,8 @@ public final class Pids {
         INTAKE="intake_temp", LOAD="load", MAP="intake_pressure", BARO="barometric_pressure", AMBIENT="ambient_temp",
         MAF="maf", FUEL_TRIM_SHORT="fuel_trim_short", FUEL_TRIM_LONG="fuel_trim_long", FUEL_PRESSURE="fuel_pressure",
         TIMING="timing_advance", THROTTLE="throttle", RUN_TIME="run_time", DISTANCE_MIL="distance_mil", OIL="oil_temp",
-        FUEL_RATE="fuel_rate", CONSUMPTION="consumption", BOOST="boost";
+        FUEL_RATE="fuel_rate", CONSUMPTION="consumption", BOOST="boost",
+        O2S11="o2_b1s1", O2S12="o2_b1s2", CAT_TEMP="cat_temp_b1s1";
 
     public interface Decoder { Float decode(int[] b); }
 
@@ -47,6 +48,9 @@ public final class Pids {
         ALL.add(new Pid(0x1F, RUN_TIME, false, b -> ab(b)));
         ALL.add(new Pid(0x21, DISTANCE_MIL, false, b -> ab(b)));
         ALL.add(new Pid(0x5C, OIL, false, b -> a(b)!=null? a(b)-40f : null));
+        ALL.add(new Pid(0x14, O2S11, true, b -> a(b)!=null? a(b)/200f : null));
+        ALL.add(new Pid(0x15, O2S12, true, b -> a(b)!=null? a(b)/200f : null));
+        ALL.add(new Pid(0x3C, CAT_TEMP, false, b -> ab(b)!=null? ab(b)/10f-40f : null));
     }
 
     public static class Monitor { public final String name; public final boolean complete; public Monitor(String n, boolean c){name=n;complete=c;} }

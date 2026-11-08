@@ -672,21 +672,25 @@ public class DiagnosticoView {
     private static final String[] SENSOR_16 = {
         Pids.RPM, Pids.COOLANT, Pids.VOLTAGE, Pids.CONSUMPTION, Pids.SPEED, Pids.LOAD,
         Pids.MAF, Pids.INTAKE, Pids.FUEL, Pids.MAP, Pids.AMBIENT, Pids.THROTTLE,
-        Pids.FUEL_TRIM_SHORT, Pids.FUEL_TRIM_LONG, Pids.TIMING, Pids.RUN_TIME
+        Pids.FUEL_TRIM_SHORT, Pids.FUEL_TRIM_LONG, Pids.TIMING, Pids.RUN_TIME,
+        Pids.O2S11, Pids.O2S12, Pids.CAT_TEMP
     };
 
     private void buildSensorsCard(LinearLayout col) {
         LinearLayout card = card(col, "Sensores en vivo");
-        TextView help = txt("16 PIDs en vivo con su tendencia. Solo se leen mientras ves esta pestaña.", 12, MUTED(), false);
+        TextView help = txt(SENSOR_16.length + " PIDs en vivo con su tendencia. Solo se leen mientras ves esta pestaña.", 12, MUTED(), false);
         help.setPadding(0, (int)(4*s), 0, (int)(8*s));
         card.addView(help, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout grid = new LinearLayout(host);
         grid.setOrientation(LinearLayout.VERTICAL);
-        for (int r = 0; r < 4; r++) {
+        int rows = (SENSOR_16.length + 3) / 4;
+        for (int r = 0; r < rows; r++) {
             LinearLayout line = new LinearLayout(host);
             line.setOrientation(LinearLayout.HORIZONTAL);
             for (int c = 0; c < 4; c++) {
-                String sig = SENSOR_16[r*4+c];
+                int idx = r*4+c;
+                if (idx >= SENSOR_16.length) break;
+                String sig = SENSOR_16[idx];
                 line.addView(sensorTile(sig), new LinearLayout.LayoutParams(0, -2, 1f));
             }
             grid.addView(line, new LinearLayout.LayoutParams(-1, -2));
@@ -794,6 +798,9 @@ public class DiagnosticoView {
         if (Pids.OIL.equals(signal)) return "Temp. aceite";
         if (Pids.FUEL_RATE.equals(signal)) return "Gasto gasolina";
         if (Pids.AMBIENT.equals(signal)) return "Temp. exterior";
+        if (Pids.O2S11.equals(signal)) return "O2 B1S1";
+        if (Pids.O2S12.equals(signal)) return "O2 B1S2 Post-Cat";
+        if (Pids.CAT_TEMP.equals(signal)) return "Temp. Catalizador";
         return signal;
     }
 
@@ -811,6 +818,7 @@ public class DiagnosticoView {
         if (Pids.CONSUMPTION.equals(signal)) return String.format("%.1f km/L", v);
         if (Pids.BOOST.equals(signal)) return String.format("%.1f psi", v * 0.145f);
         if (Pids.FUEL_RATE.equals(signal)) return String.format("%.1f L/h", v);
+        if (Pids.O2S11.equals(signal) || Pids.O2S12.equals(signal)) return String.format("%.2f V", v);
         return String.format("%.0f°C", v);
     }
 
@@ -826,6 +834,8 @@ public class DiagnosticoView {
         if (Pids.FUEL_TRIM_SHORT.equals(signal) || Pids.FUEL_TRIM_LONG.equals(signal)) return 5f;
         if (Pids.TIMING.equals(signal)) return 5f;
         if (Pids.BOOST.equals(signal)) return 10f;
+        if (Pids.O2S11.equals(signal) || Pids.O2S12.equals(signal)) return 0.5f;
+        if (Pids.CAT_TEMP.equals(signal)) return 50f;
         return 0f;
     }
 
