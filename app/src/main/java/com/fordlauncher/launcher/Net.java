@@ -119,13 +119,45 @@ public class Net {
     }
 
     public static byte[] get(String url, int timeoutMs) throws Exception {
+        // Intento 1: fábrica propia (IPv4 forzado + TLS 1.2, necesaria en head units).
+        // Intento 2: pila del sistema (respaldos cuando la fábrica se cuelga o el
+        // handshake falla, p. ej. API 27 + ciertos hosts). Cada intento acotado.
+        try {
+            return timedGet(url, timeoutMs, true);
+        } catch (Exception first) {
+            try { android.util.Log.w("FordLauncher/Net", "get fábrica propia falló, reintento sistema: " + first); } catch (Throwable ignored) {}
+            return timedGet(url, timeoutMs, false);
+        }
+    }
+
+    private static byte[] timedGet(final String url, final int timeoutMs, final boolean customFactory) throws Exception {
+        java.util.concurrent.Future<byte[]> fut = POST_POOL.submit(new java.util.concurrent.Callable<byte[]>() {
+            public byte[] call() throws Exception {
+                return doGet(url, timeoutMs, customFactory);
+            }
+        });
+        try {
+            return fut.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            try { fut.cancel(true); } catch (Throwable ignored) {}
+            throw new Exception("timeout " + timeoutMs + "ms");
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable c = e.getCause() != null ? e.getCause() : e;
+            if (c instanceof Exception) throw (Exception) c;
+            throw new Exception(String.valueOf(c));
+        } catch (java.util.concurrent.CancellationException e) {
+            throw new Exception("cancelado");
+        }
+    }
+
+    private static byte[] doGet(String url, int timeoutMs, boolean customFactory) throws Exception {
         String current = url;
         // GitHub API /releases/latest responde 302 a /releases/tag/vX: seguirlo a mano
         // (HttpURLConnection no siempre lo sigue en Android viejo / https->https distinto host).
         for (int hop = 0; hop <= 5; hop++) {
             URL parsed = new URL(current);
             HttpURLConnection c = (HttpURLConnection) parsed.openConnection();
-            if (c instanceof HttpsURLConnection && factory != null) {
+            if (customFactory && c instanceof HttpsURLConnection && factory != null) {
                 ((HttpsURLConnection) c).setSSLSocketFactory(factory);
             }
             c.setInstanceFollowRedirects(false);
