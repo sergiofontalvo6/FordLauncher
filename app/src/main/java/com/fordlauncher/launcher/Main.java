@@ -1161,7 +1161,7 @@ public class Main extends Activity {
             long epoch = prefs.getLong("oil_service_date_epoch", 0L);
             if (epoch > 0) diasUso = (System.currentTimeMillis() - epoch) / (1000L * 60L * 60L * 24L);
         } catch (Throwable ignored) {}
-        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes) + (diasUso > 0 ? " · " + diasUso + " d" : ""));
+        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km", kmRestantes) + (diasUso > 0 ? " · Días: " + diasUso : ""));
         if (oilBar != null) {
             oilBar.setFraction(interval > 0 ? kmRestantes / (float) interval : 0f);
             oilBar.setFillColor(zoneColor(interval > 0 ? kmRestantes / (float) interval : 1f));
@@ -1193,6 +1193,17 @@ public class Main extends Activity {
         etLastOdo.setHintTextColor(MUTED);
         etLastOdo.setText(String.valueOf(lastOdo > 0 ? lastOdo : prefInt("odo_km_total", 0)));
 
+        final android.widget.EditText etDate = new android.widget.EditText(this);
+        etDate.setSingleLine(true);
+        etDate.setTextColor(TEXT);
+        etDate.setHintTextColor(MUTED);
+        etDate.setHint("dd/MM/yyyy");
+        long epochSaved = 0L;
+        try { epochSaved = prefs.getLong("oil_service_date_epoch", 0L); } catch (Throwable ignored) { }
+        if (epochSaved > 0) {
+            try { etDate.setText(new SimpleDateFormat("dd/MM/yyyy", ES).format(new Date(epochSaved))); } catch (Throwable ignored) { }
+        }
+
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (18 * s);
@@ -1204,6 +1215,10 @@ public class Main extends Activity {
         l2.setPadding(0, (int) (10 * s), 0, 0);
         col.addView(l2);
         col.addView(etLastOdo, new LinearLayout.LayoutParams(-1, -2));
+        TextView l3 = tv("Fecha del último cambio (día/mes/año)", 13, MUTED, false);
+        l3.setPadding(0, (int) (10 * s), 0, 0);
+        col.addView(l3);
+        col.addView(etDate, new LinearLayout.LayoutParams(-1, -2));
         new AlertDialog.Builder(this, dlg())
             .setTitle("Control de aceite")
             .setView(col)
@@ -1213,10 +1228,17 @@ public class Main extends Activity {
                     int lastOdo2 = prefInt("oil_last_service_odometer", 0);
                     try { interval = Integer.parseInt(etInterval.getText().toString().trim()); } catch (Throwable ignored) {}
                     try { lastOdo2 = Integer.parseInt(etLastOdo.getText().toString().trim()); } catch (Throwable ignored) {}
+                    long epoch = -1L;
+                    try {
+                        String ds = etDate.getText().toString().trim();
+                        if (ds.length() > 0) epoch = new SimpleDateFormat("dd/MM/yyyy", ES).parse(ds).getTime();
+                    } catch (Throwable ignored) {}
+                    long epochPrev = 0L;
+                    try { epochPrev = prefs.getLong("oil_service_date_epoch", 0L); } catch (Throwable ignored) {}
                     prefs.edit()
                         .putInt("oil_change_interval_km", interval)
                         .putInt("oil_last_service_odometer", lastOdo2)
-                        .putLong("oil_service_date_epoch", System.currentTimeMillis())
+                        .putLong("oil_service_date_epoch", epoch > 0 ? epoch : epochPrev)
                         .apply();
                     updateOilWidgetUI();
                     updateTelemetryBar();
