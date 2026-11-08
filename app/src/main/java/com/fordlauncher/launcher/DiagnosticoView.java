@@ -21,6 +21,7 @@ import android.widget.TextView;
 import com.fordlauncher.launcher.obd.CarVoiceSpeaker;
 import com.fordlauncher.launcher.obd.Codes;
 import com.fordlauncher.launcher.obd.Derived;
+import com.fordlauncher.launcher.obd.EdgeVoiceSpeaker;
 import com.fordlauncher.launcher.obd.GeminiDiagnosticClient;
 import com.fordlauncher.launcher.obd.Health;
 import com.fordlauncher.launcher.obd.ObdRepository;
@@ -105,6 +106,9 @@ public class DiagnosticoView {
 
     // Diagnóstico inteligente IA (Gemini + voz)
     private CarVoiceSpeaker speaker;
+    private EdgeVoiceSpeaker edgeSpeaker;
+    private String edgeSpeakerVoice;
+    private String pendingCloudText;
     private TextView aiResult;
     private TextView aiStatus;
     private TextView aiAnalyzeBtn;
@@ -566,10 +570,47 @@ public class DiagnosticoView {
         updateAiSpeakLabel();
     }
 
+    private boolean anySpeaking() {
+        return (speaker != null && speaker.isSpeaking()) || (edgeSpeaker != null && edgeSpeaker.isSpeaking());
+    }
+
     private void updateAiSpeakLabel() {
         if (aiSpeakBtn == null) return;
-        boolean speaking = speaker != null && speaker.isSpeaking();
-        aiSpeakBtn.setText(speaking ? "⏹ Detener" : "🔊 Escuchar");
+        aiSpeakBtn.setText(anySpeaking() ? "⏹ Detener" : "🔊 Escuchar");
+    }
+
+    private String edgeVoiceName() {
+        try {
+            String v = host.getPrefs().getString("tts_voice", null);
+            if (v != null && v.startsWith("edge:") && v.length() > 5) return v.substring(5);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private EdgeVoiceSpeaker ensureEdgeSpeaker() {
+        String voice = edgeVoiceName();
+        if (voice == null) return null;
+        if (edgeSpeaker != null && !voice.equals(edgeSpeakerVoice)) {
+            try { edgeSpeaker.shutdown(); } catch (Throwable ignored) {}
+            edgeSpeaker = null;
+        }
+        if (edgeSpeaker == null) {
+            edgeSpeakerVoice = voice;
+            edgeSpeaker = new EdgeVoiceSpeaker(host, voice);
+            edgeSpeaker.setListener(new EdgeVoiceSpeaker.Listener(){
+                public void onSpeaking(boolean speaking) { ui.post(new Runnable(){ public void run(){ updateAiSpeakLabel(); } }); }
+                public void onError(String msg) { ui.post(new Runnable(){ public void run(){
+                    // Respaldo: voz en el dispositivo si la nube falla.
+                    String text = pendingCloudText;
+                    pendingCloudText = null;
+                    try {
+                        if (text != null) ensureSpeaker().speak(text);
+                    } catch (Throwable ignored) {}
+                    updateAiSpeakLabel();
+                } }); }
+            });
+        }
+        return edgeSpeaker;
     }
 
     private CarVoiceSpeaker ensureSpeaker() {
@@ -588,12 +629,27 @@ public class DiagnosticoView {
 
     private void runsAiSpeak(String text) {
         if (text == null) return;
+        if (edgeVoiceName() != null) {
+            EdgeVoiceSpeaker edge = ensureEdgeSpeaker();
+            if (edge != null) {
+                pendingCloudText = text;
+                edge.speak(text);
+                updateAiSpeakLabel();
+                return;
+            }
+        }
         ensureSpeaker().speak(text);
         updateAiSpeakLabel();
     }
 
     private void toggleAiSpeak() {
-        if (speaker != null && speaker.isSpeaking()) { speaker.stop(); updateAiSpeakLabel(); return; }
+        if (anySpeaking()) {
+            try { if (speaker != null) speaker.stop(); } catch (Throwable ignored) {}
+            try { if (edgeSpeaker != null) edgeSpeaker.stop(); } catch (Throwable ignored) {}
+            pendingCloudText = null;
+            updateAiSpeakLabel();
+            return;
+        }
         if (lastAiText == null || lastAiText.length() == 0) return;
         runsAiSpeak(lastAiText);
     }
@@ -693,6 +749,9 @@ public class DiagnosticoView {
     public void onDestroy() {
         try { if (speaker != null) speaker.shutdown(); } catch (Throwable ignored) {}
         speaker = null;
+        try { if (edgeSpeaker != null) edgeSpeaker.shutdown(); } catch (Throwable ignored) {}
+        edgeSpeaker = null;
+        edgeSpeakerVoice = null;
     }
 
     // ---------- CODIGOS (Workshop.kt CodesCard + InspectionCard) ----------

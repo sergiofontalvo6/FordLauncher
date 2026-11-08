@@ -2339,7 +2339,7 @@ public class Main extends Activity {
         row(v, "Motor de voz", "Qué motor lee el diagnóstico", (eng == null || eng.length() == 0) ? "Automático (sistema)" : eng,
             new Runnable() { public void run() { pickTtsEngine(); } });
         String vname = prefs.getString("tts_voice", null);
-        row(v, "Voz", "La voz concreta que lee (idioma, tono)", (vname == null || vname.length() == 0) ? "Automática (español)" : vname,
+        row(v, "Voz", "La voz concreta que lee (idioma, tono)", voiceLabel(vname),
             new Runnable() { public void run() { pickTtsVoice(); } });
         row(v, "Instalar / importar voces", "Descarga voces en español u otros idiomas", "Instalar",
             new Runnable() { public void run() { installTtsVoices(); } });
@@ -2379,47 +2379,73 @@ public class Main extends Activity {
     }
 
     private void pickTtsVoice() {
+        // Voces en la nube (naturales, requieren internet): no necesitan TTS local.
+        final String[] CLOUD_NAMES = new String[]{
+            "edge:es-CO-GonzaloNeural", "edge:es-MX-JorgeNeural", "edge:es-AR-TomasNeural", "edge:es-ES-AlvaroNeural",
+        };
+        final String[] CLOUD_LABELS = new String[]{
+            "Nube natural — es-CO · Gonzalo (hombre colombiano)",
+            "Nube natural — es-MX · Jorge (hombre mexicano)",
+            "Nube natural — es-AR · Tomas (hombre argentino)",
+            "Nube natural — es-ES · Alvaro (hombre español)",
+        };
         openTts(new TextToSpeech.OnInitListener() {
             public void onInit(int status) {
+                if (status != TextToSpeech.SUCCESS && SDK >= 21) {
+                    // Sin TTS local: igual ofrecer las voces de nube.
+                    showVoicePicker(new java.util.ArrayList<android.speech.tts.Voice>(), CLOUD_NAMES, CLOUD_LABELS);
+                    return;
+                }
                 if (status != TextToSpeech.SUCCESS) { toast("No se pudo iniciar la voz"); return; }
                 if (SDK < 21) { toast("Voces seleccionables desde Android 5"); return; }
                 java.util.Set<android.speech.tts.Voice> voices = null;
                 try { voices = getPrefsTts().getVoices(); } catch (Throwable ignored) {}
-                if (voices == null || voices.isEmpty()) {
-                    new AlertDialog.Builder(Main.this, dlg())
-                        .setTitle("Voz")
-                        .setMessage("No hay voces instaladas todavía. Toca «Instalar / importar voces» y descarga una (la de español se baja sola al escuchar).")
-                        .setPositiveButton("Instalar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); installTtsVoices(); } })
-                        .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
-                        .show();
-                    return;
-                }
-                final String[] names = new String[voices.size() + 1];
-                final String[] labels = new String[voices.size() + 1];
-                names[0] = null; labels[0] = "Automática (español)";
-                java.util.List<android.speech.tts.Voice> list = new java.util.ArrayList<android.speech.tts.Voice>(voices);
-                for (int i = 0; i < list.size(); i++) {
-                    android.speech.tts.Voice voice = list.get(i);
-                    names[i + 1] = voice.getName();
-                    String loc = null;
-                    try { loc = voice.getLocale().toLanguageTag(); } catch (Throwable ignored) { loc = voice.getLocale().getLanguage(); }
-                    labels[i + 1] = loc + " — " + voice.getName();
-                }
-                new AlertDialog.Builder(Main.this, dlg())
-                    .setTitle("Voz")
-                    .setItems(labels, new DialogInterface.OnClickListener() {
-                        public void onClick(DialogInterface d, int w) {
-                            String chosen = names[w];
-                            if (chosen == null) prefs.edit().remove("tts_voice").apply();
-                            else prefs.edit().putString("tts_voice", chosen).apply();
-                            finishTts();
-                            showSettings(8);
-                        }
-                    })
-                    .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
-                    .show();
+                java.util.List<android.speech.tts.Voice> local =
+                    (voices != null) ? new java.util.ArrayList<android.speech.tts.Voice>(voices) : new java.util.ArrayList<android.speech.tts.Voice>();
+                showVoicePicker(local, CLOUD_NAMES, CLOUD_LABELS);
             }
         });
+    }
+
+    private void showVoicePicker(final java.util.List<android.speech.tts.Voice> voices, String[] cloudNames, String[] cloudLabels) {
+        final int n = cloudNames.length + 1 + voices.size();
+        final String[] names = new String[n];
+        final String[] labels = new String[n];
+        for (int i = 0; i < cloudNames.length; i++) { names[i] = cloudNames[i]; labels[i] = cloudLabels[i]; }
+        names[cloudNames.length] = null; labels[cloudNames.length] = "Automática (español)";
+        for (int i = 0; i < voices.size(); i++) {
+            android.speech.tts.Voice voice = voices.get(i);
+            names[cloudNames.length + 1 + i] = voice.getName();
+            String loc = null;
+            try { loc = voice.getLocale().toLanguageTag(); } catch (Throwable ignored) { loc = voice.getLocale().getLanguage(); }
+            labels[cloudNames.length + 1 + i] = loc + " — " + voice.getName();
+        }
+        new AlertDialog.Builder(Main.this, dlg())
+            .setTitle("Voz")
+            .setItems(labels, new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    String chosen = names[w];
+                    if (chosen == null) prefs.edit().remove("tts_voice").apply();
+                    else prefs.edit().putString("tts_voice", chosen).apply();
+                    finishTts();
+                    showSettings(8);
+                }
+            })
+            .setNegativeButton("Cancelar", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { finishTts(); } })
+            .show();
+    }
+
+    private static String voiceLabel(String v) {
+        if (v == null || v.length() == 0) return "Automática (español)";
+        if (v.startsWith("edge:")) {
+            String n = v.substring(5);
+            if ("es-CO-GonzaloNeural".equals(n)) return "Nube · es-CO Gonzalo";
+            if ("es-MX-JorgeNeural".equals(n)) return "Nube · es-MX Jorge";
+            if ("es-AR-TomasNeural".equals(n)) return "Nube · es-AR Tomas";
+            if ("es-ES-AlvaroNeural".equals(n)) return "Nube · es-ES Alvaro";
+            return "Nube · " + n;
+        }
+        return v;
     }
 
     private void installTtsVoices() {

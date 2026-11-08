@@ -29,6 +29,9 @@ import javax.net.ssl.X509TrustManager;
 public class Net {
     private static SSLSocketFactory factory;
     private static final java.util.concurrent.ExecutorService POST_POOL = java.util.concurrent.Executors.newCachedThreadPool();
+
+    /** Fábrica propia (IPv4 + TLS 1.2) para reuso (Edge TTS); null si no está inicializada. */
+    public static SSLSocketFactory customFactory() { return factory; }
     static String initInfo = "sin iniciar";
 
     public static synchronized void init(Context c) {
