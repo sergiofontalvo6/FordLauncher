@@ -534,8 +534,10 @@ public class TelefonoView {
 
         List<CallRec> shown = new ArrayList<CallRec>();
         for (CallRec r : calls) {
-            // Desconocido: no está en contactos O nunca se contestó ni se llamó (duración 0).
-            boolean isUnknown = !r.known || r.duration == 0;
+            // Desconocido: no está en contactos Y nunca se contestó ni se llamó (duración 0).
+            // Los contactos (aunque la llamada fuera perdida) y los desconocidos
+            // contestados quedan en el historial regular.
+            boolean isUnknown = !r.known && r.duration == 0;
             boolean a = unknownOnly ? isUnknown : !isUnknown;
             if (a) shown.add(r);
         }
