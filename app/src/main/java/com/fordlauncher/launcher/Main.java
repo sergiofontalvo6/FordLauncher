@@ -540,6 +540,10 @@ public class Main extends Activity {
 
     /** Android 6+: respuesta a la solicitud de permisos. */
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        if (req == 99) {
+            try { if (phone != null && phoneView != null) phone.refresh(); } catch (Throwable ignored) {}
+            return;
+        }
         if (req != 77) return;
         stopGps();
         startGps();
@@ -1110,7 +1114,7 @@ public class Main extends Activity {
         }
         if (speed != null && speed > 0f && telemLastMs > 0) {
             float dtH = (nowMs - telemLastMs) / 3600000f;
-            if (dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
+            if (prefs.getBoolean("odo_auto", true) && dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
             if (odoKmTotal - odoLastSavedKm > 0.5f) {
                 prefs.edit().putInt("odo_km_total", (int) odoKmTotal).putInt("oil_current_odometer", (int) odoKmTotal).apply();
                 odoLastSavedKm = odoKmTotal;
@@ -1174,7 +1178,7 @@ public class Main extends Activity {
             long epoch = prefs.getLong("oil_service_date_epoch", 0L);
             if (epoch > 0) diasUso = (System.currentTimeMillis() - epoch) / (1000L * 60L * 60L * 24L);
         } catch (Throwable ignored) {}
-        if (oilText != null) oilText.setText(String.format(ES, "Aceite: %,d km pasados (%,d rest.)", kmPasados, kmRestantes) + (diasUso > 0 ? " · Días: " + diasUso : ""));
+        if (oilText != null) oilText.setText(String.format(ES, "%,d km recorridos", kmPasados) + (diasUso > 0 ? " · " + diasUso + " días" : ""));
         if (oilBar != null) {
             oilBar.setFraction(porcentaje / 100f);
             oilBar.setFillColor(oilZoneColor(porcentaje));
@@ -1187,6 +1191,40 @@ public class Main extends Activity {
         catch (ClassCastException e) {
             try { return (int) prefs.getFloat(key, def); } catch (Throwable t) { return def; }
         } catch (Throwable t) { return def; }
+    }
+
+    /** Diálogo en Ajustes para alinear el odómetro interno con la cifra del tablero. */
+    private void odometerDialog() {
+        final android.widget.EditText et = new android.widget.EditText(this);
+        et.setSingleLine(true);
+        et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        et.setTextColor(TEXT);
+        et.setHintTextColor(MUTED);
+        int cur = prefInt("oil_current_odometer", prefInt("odo_km_total", 0));
+        et.setText(String.valueOf(cur));
+        FrameLayout wrap = new FrameLayout(this);
+        int pad = (int) (20 * s);
+        wrap.setPadding(pad, pad / 2, pad, 0);
+        wrap.addView(et);
+        new AlertDialog.Builder(this, dlg())
+            .setTitle("Odómetro actual (km, del tablero)")
+            .setView(wrap)
+            .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    int v = -1;
+                    try { v = Integer.parseInt(et.getText().toString().trim()); } catch (Throwable ignored) {}
+                    if (v < 0) { toast("Ingresa un número válido"); return; }
+                    odoKmTotal = v;
+                    odoLastSavedKm = v;
+                    prefs.edit().putInt("odo_km_total", v).putInt("oil_current_odometer", v).apply();
+                    updateOilWidgetUI();
+                    updateTelemetryBar();
+                    toast("Odómetro alineado a " + String.format(ES, "%,d", v) + " km");
+                    if (settingsCat == 1) showSettings(1);
+                }
+            })
+            .setNegativeButton("Cancelar", null)
+            .show();
     }
 
     private void oilDialog() {
@@ -1243,7 +1281,7 @@ public class Main extends Activity {
         TextView l1 = tv("Intervalo (km)", 13, MUTED, false);
         col.addView(l1);
         col.addView(etInterval, new LinearLayout.LayoutParams(-1, -2));
-        TextView l2 = tv("Odómetro del último cambio (km)", 13, MUTED, false);
+        TextView l2 = tv("Odómetro del último cambio (km, del tablero)", 13, MUTED, false);
         l2.setPadding(0, (int) (10 * s), 0, 0);
         col.addView(l2);
         col.addView(etLastOdo, new LinearLayout.LayoutParams(-1, -2));
@@ -1283,7 +1321,7 @@ public class Main extends Activity {
             })
             .setNeutralButton("Aceite nuevo", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {
-                    int currentOdo = prefInt("odo_km_total", 0);
+                    int currentOdo = prefInt("oil_current_odometer", prefInt("odo_km_total", 0));
                     prefs.edit().putInt("oil_last_service_odometer", currentOdo).putLong("oil_service_date_epoch", System.currentTimeMillis()).apply();
                     updateOilWidgetUI();
                     updateTelemetryBar();
@@ -1406,8 +1444,8 @@ public class Main extends Activity {
     }
 
     private void buildDock() {
-        final String[] icons = {"radio", "bluetooth", "music_note", "photo_camera", "public", "folder", "bug_report", "settings", "apps"};
-        final String[] names = {"Radio", "Bluetooth", "Música", "Cámara", "Navegador", "Archivos", "Diagnóstico", "Ajustes", "Apps"};
+        final String[] icons = {"radio", "bluetooth", "music_note", "phone_android", "apps", "public", "folder", "bug_report", "settings"};
+        final String[] names = {"Radio", "Bluetooth", "Música", "Teléfono", "Apps", "Navegador", "Archivos", "Diagnóstico", "Ajustes"};
         for (int i = 0; i < 9; i++) {
             final int idx = i;
             LinearLayout b = new LinearLayout(this);
@@ -1426,18 +1464,19 @@ public class Main extends Activity {
                         case 0: openSlot(0); break;
                         case 1: openSlot(1); break;
                         case 2: openSlot(2); break;
-                        case 3: openSlot(3); break;
-                        case 4: openBrowser(); break;
-                        case 5: openSlot(4); break;
-                        case 6: openObdDiag(); break;
-                        case 7: openSlot(5); break;
+                        case 3: openPhone(); break;
+                        case 4: openDrawer(); break;
+                        case 5: openBrowser(); break;
+                        case 6: openSlot(4); break;
+                        case 7: openObdDiag(); break;
+                        case 8: openSlot(5); break;
                         default: openDrawer();
                     }
                 }
             });
             b.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View v) {
-                    int[] map = {0, 1, 2, 3, -1, 4, -2, 5, -2};
+                    int[] map = {0, 1, 2, -2, -2, -1, 4, -2, 5};
                     int m = map[idx];
                     if (m == -1) { pickFor("web", "Navegador"); return true; }
                     if (m < 0) return false;
@@ -1483,6 +1522,54 @@ public class Main extends Activity {
         try { if (workshop != null) workshop.onDestroy(); } catch (Throwable ignored) {}
         workshop = null;
         if (workshopView != null) { try { board.removeView(workshopView); } catch (Throwable ignored) {} workshopView = null; }
+    }
+
+    private FrameLayout phoneView;
+    private TelefonoView phone;
+
+    static final String[] PHONE_PERMS = {"android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS",
+            "android.permission.READ_CALL_LOG", "android.permission.WRITE_CALL_LOG", "android.permission.CALL_PHONE"};
+
+    void ensurePhonePerms() {
+        if (SDK < 23) return;
+        java.util.ArrayList<String> need = new java.util.ArrayList<String>();
+        for (String p : PHONE_PERMS) if (checkSelfPermission(p) != android.content.pm.PackageManager.PERMISSION_GRANTED) need.add(p);
+        if (!need.isEmpty()) {
+            try { requestPermissions(need.toArray(new String[0]), 99); } catch (Throwable ignored) {}
+        }
+    }
+
+    boolean phonePermsGranted() {
+        for (String p : PHONE_PERMS) if (checkSelfPermission(p) != android.content.pm.PackageManager.PERMISSION_GRANTED) return false;
+        return true;
+    }
+
+    /** Módulo Teléfono en overlay central (igual que el taller, sin tapar reloj/dock). */
+    private void openPhone() {
+        if (phoneView != null) { closePhone(); return; }
+        ensurePhonePerms();
+        phoneView = new FrameLayout(this);
+        phoneView.setBackgroundColor(BG);
+        phoneView.setClickable(true);
+        phone = new TelefonoView(this, s);
+        phoneView.addView(phone.build(), new FrameLayout.LayoutParams(-1, -1));
+        TextView close = tv("✕ Inicio", 12, Color.WHITE, true);
+        close.setGravity(Gravity.CENTER);
+        close.setBackground(round(RED, 12));
+        close.setPadding((int)(10*s),(int)(6*s),(int)(10*s),(int)(6*s));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2,-2);
+        lp.gravity = Gravity.TOP | Gravity.RIGHT;
+        lp.rightMargin = (int)(10*s);
+        lp.topMargin = (int)(8*s);
+        close.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ closePhone(); } });
+        phoneView.addView(close, lp);
+        place(board, phoneView, 0, 56, 1024, 484);
+        phoneView.bringToFront();
+    }
+
+    private void closePhone() {
+        try { if (phone != null) phone.destroy(); } catch (Throwable ignored) {}
+        if (phoneView != null) { try { board.removeView(phoneView); } catch (Throwable ignored) {} phoneView = null; phone = null; }
     }
 
     // ───────────────────────── helpers de UI ─────────────────────────
@@ -1597,9 +1684,9 @@ public class Main extends Activity {
                         float distM = l.distanceTo(lastGpsLoc);
                         if (distM > 1f && distM < 5000f) {
                             if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
-                            odoKmTotal += distM / 1000f;
+                            if (prefs.getBoolean("odo_auto", true)) odoKmTotal += distM / 1000f;
                             if (odoKmTotal - odoLastSavedKm > 0.5f) {
-                                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).apply();
+                                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).putInt("oil_current_odometer", (int) odoKmTotal).apply();
                                 odoLastSavedKm = odoKmTotal;
                             }
                             updateOilWidgetUI();
@@ -2767,6 +2854,22 @@ public class Main extends Activity {
         row(c, "Tu nombre", "Aparece en el saludo de la pantalla de inicio", prefs.getString("user_name", ""), edit("user_name", "Tu nombre", ""));
         row(c, "Nombre del vehículo", null, prefs.getString("car_name", "Mi vehículo"), edit("car_name", "Nombre del vehículo", "Mi vehículo"));
         row(c, "Etiqueta", "Versión o placa. Déjala vacía para ocultarla", prefs.getString("car_tag", ""), edit("car_tag", "Etiqueta (vacío para ocultarla)", ""));
+        LinearLayout o = section(body, "Odómetro y aceite");
+        toggle(o, "Odómetro automático", "Suma los km recorridos con la velocidad OBD (y GPS si el OBD está desconectado). Siempre activo para que la cifra no se congele.", prefs.getBoolean("odo_auto", true), new IntCb() {
+            public void on(int i) {
+                prefs.edit().putBoolean("odo_auto", i == 1).apply();
+                showSettings(1);
+            }
+        });
+        int curOdo = prefInt("oil_current_odometer", prefInt("odo_km_total", 0));
+        row(o, "Odómetro actual (km)", "Cifra del tablero. Al guardar, el contador se alinea a ese valor y sigue sumando solo.", String.format(ES, "%,d", curOdo), new Runnable() {
+            public void run() { odometerDialog(); }
+        });
+        int lastOdo = prefInt("oil_last_service_odometer", 0);
+        int kmPas = Math.max(0, curOdo - lastOdo);
+        row(o, "Último cambio de aceite", "Se registra en la tarjeta ACEITE de la pantalla de inicio.", lastOdo > 0 ? String.format(ES, "%,d km recorridos", kmPas) : "Sin registrar", new Runnable() {
+            public void run() { oilDialog(); }
+        });
         LinearLayout f = section(body, "Wallpaper (Luces)");
         boolean hasDay = !prefs.getString("wallpaper_day_path", "").isEmpty() || CarPhoto.load(this) != null;
         boolean hasNight = !prefs.getString("wallpaper_night_path", "").isEmpty();
