@@ -2928,10 +2928,13 @@ public class Main extends Activity {
     }
 
     private void catAi(LinearLayout body) {
-        LinearLayout c = section(body, "Diagnóstico IA");
+        LinearLayout c = section(body, "Copiloto IA");
         String apiKey = prefs.getString("gemini_api_key", "");
         row(c, "Clave API de Gemini", "Diagnóstico con IA en las pestañas Salud y Códigos (gratis en Google AI Studio)", (apiKey == null || apiKey.trim().length() == 0) ? "Sin clave" : "Configurada",
             edit("gemini_api_key", "Clave API de Gemini", ""));
+        toggle(c, "Botón flotante de copiloto IA", "Muestra un botón flotante movible para hablarle a la IA", prefs.getBoolean("pref_enable_floating_ai_button", true), new IntCb() { public void on(int i) {
+            prefs.edit().putBoolean("pref_enable_floating_ai_button", i == 1).apply(); refreshFloatingAi(); showSettings(8);
+        }});
         toggle(c, "Leer diagnóstico en voz alta", "Lee automáticamente la respuesta de la IA al terminar de analizar", prefs.getBoolean("tts_auto_read", true), new IntCb() { public void on(int i) {
             prefs.edit().putBoolean("tts_auto_read", i == 1).apply(); showSettings(8);
         }});
