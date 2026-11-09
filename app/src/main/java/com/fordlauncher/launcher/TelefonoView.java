@@ -66,6 +66,7 @@ public class TelefonoView {
         String key, name, number;
         Uri photoUri;
         boolean starred;
+        long contactId = -1;
     }
     public static final class CallRec {
         String number, name;
@@ -852,6 +853,7 @@ public class TelefonoView {
                 ct.number = safe(c.getString(2), "");
                 long contactId = -1;
                 try { contactId = c.getLong(3); } catch (Throwable ignored) { }
+                ct.contactId = contactId;
                 ct.photoUri = contactId >= 0 ? thumbMap.get(contactId) : null;
                 Boolean st = contactId >= 0 ? starMap.get(contactId) : null;
                 ct.starred = (st != null && st.booleanValue()) || favs.contains(ct.key);
@@ -871,6 +873,15 @@ public class TelefonoView {
         String key = ct.key;
         if (ct.starred) favs.add(key); else favs.remove(key);
         try { host.getPrefs().edit().putStringSet("phone_fav_ids", favs).apply(); } catch (Throwable ignored) {}
+        // Mejor esfuerzo: persistir también en la agenda del sistema para que el
+        // favorito quede marcado ahí (puede ser de solo lectura en contactos PBAP).
+        try {
+            if (ct.contactId >= 0) {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(ContactsContract.Contacts.STARRED, ct.starred ? 1 : 0);
+                host.getContentResolver().update(Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_URI, String.valueOf(ct.contactId)), cv, null, null);
+            }
+        } catch (Throwable ignored) {}
     }
 
     private String lookupName(String number) {
