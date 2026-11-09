@@ -239,4 +239,75 @@ public class ObdRepository {
         synchronized(values) { values.clear(); }
         if (listener != null) listener.onValues(new HashMap<String,Float>());
     }
+
+    // ---------- Modo demo: sensores simulados (sin adaptador) ----------
+    private volatile boolean demo;
+    private Thread demoThread;
+
+    public boolean isDemo() { return demo; }
+
+    public void setDemo(boolean on) {
+        if (demo == on) return;
+        demo = on;
+        if (on) {
+            synchronized(lock) { supported.clear(); for (Pids.Pid p : Pids.ALL) supported.add(p.code); }
+            adapter = "Demo ELM327";
+            setState(State.ON, null);
+            if (demoThread != null) demoThread.interrupt();
+            demoThread = new Thread(new Runnable() {
+                public void run() {
+                    long t0 = System.currentTimeMillis();
+                    int tick = 0;
+                    java.util.Random rnd = new java.util.Random(42L);
+                    int runTime = 420;
+                    while (demo && state == State.ON) {
+                        tick++;
+                        runTime += 2;
+                        Map<String,Float> batch = new HashMap<String,Float>();
+                        float rpm = 850f + (float)(rnd.nextGaussian() * 25f);
+                        float coolant = Math.min(118f, 108f + tick * 0.5f); // anomalía: sube hacia sobrecalentamiento
+                        batch.put(Pids.RPM, rpm);
+                        batch.put(Pids.COOLANT, coolant);
+                        batch.put(Pids.INTAKE, 34f);
+                        batch.put(Pids.VOLTAGE, 11.3f); // anomalía: batería baja
+                        batch.put(Pids.FUEL, 68f);
+                        batch.put(Pids.SPEED, 0f);
+                        batch.put(Pids.LOAD, 24f);
+                        batch.put(Pids.MAP, 32f);
+                        batch.put(Pids.MAF, 2.2f);
+                        batch.put(Pids.THROTTLE, 0f);
+                        batch.put(Pids.FUEL_TRIM_SHORT, 4f);
+                        batch.put(Pids.FUEL_TRIM_LONG, 22f); // anomalía: mezcla pobre
+                        batch.put(Pids.TIMING, 10f);
+                        batch.put(Pids.RUN_TIME, (float) runTime);
+                        batch.put(Pids.O2S11, 0.45f); // anomalía: O2 pegado
+                        batch.put(Pids.O2S12, 0.44f);
+                        batch.put(Pids.BARO, 101f);
+                        batch.put(Pids.AMBIENT, 19f);
+                        batch.put(Pids.CAT_TEMP, 640f + coolant * 2f);
+                        batch.put(Pids.FUEL_RATE, 1.4f);
+                        synchronized(values) { for (Map.Entry<String,Float> e : batch.entrySet()) if (e.getValue() != null) values.put(e.getKey(), e.getValue()); }
+                        synchronized(history) {
+                            for (Map.Entry<String,Float> e : batch.entrySet()) {
+                                if (e.getValue() == null) continue;
+                                java.util.Deque<Float> q = history.get(e.getKey());
+                                if (q == null) { q = new java.util.ArrayDeque<Float>(); history.put(e.getKey(), q); }
+                                q.addLast(e.getValue());
+                                while (q.size() > 60) q.removeFirst();
+                            }
+                        }
+                        if (listener != null) listener.onValues(getValues());
+                        try { Thread.sleep(500); } catch (InterruptedException ie) { break; }
+                    }
+                }
+            });
+            demoThread.start();
+        } else {
+            if (demoThread != null) demoThread.interrupt();
+            synchronized(values) { values.clear(); }
+            synchronized(history) { history.clear(); }
+            setState(elm != null ? state : State.OFF, null);
+            if (listener != null) listener.onValues(new HashMap<String,Float>());
+        }
+    }
 }

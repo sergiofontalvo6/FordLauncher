@@ -29,8 +29,15 @@ public class GeminiDiagnosticClient {
     }
 
     public static void analyze(final Context ctx, final String jsonSnapshot, final Callback callback) {
+        analyze(ctx, jsonSnapshot, null, callback);
+    }
+
+    public static void analyze(final Context ctx, final String jsonSnapshot, final String task, final Callback callback) {
         final String key = apiKey(ctx);
         final String snap = jsonSnapshot == null ? "{}" : jsonSnapshot;
+        final String taskText = task != null && task.length() > 0
+                ? task
+                : "Analiza estos datos OBD2 y códigos de falla";
         POOL.execute(new Runnable() {
             public void run() {
                 if (key.length() == 0) {
@@ -43,7 +50,7 @@ public class GeminiDiagnosticClient {
                     // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
-                    String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta. Analiza estos datos OBD2 y codigos de falla: " + snap
+                    String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta. " + taskText + ": " + snap
                             + ". Explica en espanol en exactamente 3 puntos concretos, claros y breves (maximo 65 palabras en total): 1. Diagnostico exacto del problema. 2. Nivel de gravedad (Bajo/Medio/Alto). 3. Que revisar o reparar en el taller. No uses asteriscos, vinetas complejas ni tecnicismos confusos.";
                     StringBuilder b = new StringBuilder();
                     b.append("{\"contents\":[{\"parts\":[{\"text\":\"");

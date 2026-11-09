@@ -1642,7 +1642,7 @@ public class Main extends Activity {
         return b;
     }
 
-    private void toast(String m) {
+    void toast(String m) {
         Toast.makeText(this, m, Toast.LENGTH_LONG).show();
     }
 

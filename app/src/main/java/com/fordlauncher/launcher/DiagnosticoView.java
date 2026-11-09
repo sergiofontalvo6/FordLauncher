@@ -105,6 +105,9 @@ public class DiagnosticoView {
     private LinearLayout tripsCol;
 
     // Diagnóstico inteligente IA (Gemini + voz)
+    private static final String AI_TASK_DEFAULT = "Analiza estos datos OBD2 y códigos de falla";
+    private static final String AI_TASK_SENSORS = "Analiza el comportamiento de todos mis sensores y encuentra anomalías";
+    private static final String AI_TASK_CHARTS = "Analiza el comportamiento de mis sensores en la gráfica y encuentra anomalías";
     private CarVoiceSpeaker speaker;
     private EdgeVoiceSpeaker edgeSpeaker;
     private String edgeSpeakerVoice;
@@ -211,10 +214,10 @@ public class DiagnosticoView {
         } else {
             paintTabs();
             switch (currentTab) {
-                case 0: buildHealthCard(content, true); buildAiCard(content); break;
-                case 1: buildCodesCard(content); buildInspectionCard(content); buildAiCard(content); refreshCodes(); break;
-                case 2: buildSensorsCard(content); break;
-                case 3: buildChartsCard(content); break;
+                case 0: buildHealthCard(content, true); buildAiCard(content, AI_TASK_DEFAULT); break;
+                case 1: buildCodesCard(content); buildInspectionCard(content); buildAiCard(content, AI_TASK_DEFAULT); refreshCodes(); break;
+                case 2: buildSensorsCard(content); buildAiCard(content, AI_TASK_SENSORS); break;
+                case 3: buildChartsCard(content); buildAiCard(content, AI_TASK_CHARTS); break;
                 default: buildAdapterCard(content); buildAlertsCard(content); buildAccelCard(content); buildTripsCard(content); break;
             }
         }
@@ -553,6 +556,10 @@ public class DiagnosticoView {
 
     // ---------- DIAGNÓSTICO INTELIGENTE IA (Gemini + voz) ----------
     private void buildAiCard(LinearLayout col) {
+        buildAiCard(col, AI_TASK_DEFAULT);
+    }
+
+    private void buildAiCard(LinearLayout col, final String task) {
         LinearLayout card = card(col, "Diagnóstico inteligente IA");
         aiStatus = txt("", 12, MUTED(), false);
         aiStatus.setVisibility(View.GONE);
@@ -564,7 +571,7 @@ public class DiagnosticoView {
         card.addView(aiResult, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        aiAnalyzeBtn = button(row, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(); } });
+        aiAnalyzeBtn = button(row, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(task); } });
         aiSpeakBtn = button(row, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
         card.addView(row, new LinearLayout.LayoutParams(-1, -2));
         updateAiSpeakLabel();
@@ -663,12 +670,12 @@ public class DiagnosticoView {
         if (aiAnalyzeBtn != null) aiAnalyzeBtn.setEnabled(!busy);
     }
 
-    private void runAiAnalyze() {
+    private void runAiAnalyze(final String task) {
         if (aiBusy) return;
-        String snap = buildSnapshotJson();
+        String snap = buildAiSnapshot(task);
         setAiBusy(true);
         if (aiResult != null) aiResult.setText("Consultando telemetría...");
-        GeminiDiagnosticClient.analyze(host, snap, new GeminiDiagnosticClient.Callback(){
+        GeminiDiagnosticClient.analyze(host, snap, task, new GeminiDiagnosticClient.Callback(){
             public void onDone(final String text, final String error) {
                 ui.post(new Runnable(){ public void run(){
                     setAiBusy(false);
@@ -687,6 +694,67 @@ public class DiagnosticoView {
                 } });
             }
         });
+    }
+
+    /** Snapshot según la pestaña: DTC (Salud/Códigos), sensores actuales (Sensores) o serie de gráfica (Gráficas). */
+    private String buildAiSnapshot(String task) {
+        if (AI_TASK_SENSORS.equals(task)) return buildSensorsSnapshotJson();
+        if (AI_TASK_CHARTS.equals(task)) return buildChartsSnapshotJson();
+        return buildSnapshotJson();
+    }
+
+    /** Todos los sensores de la pestaña Sensores con su valor actual. */
+    private String buildSensorsSnapshotJson() {
+        Map<String, Float> v = null;
+        try { v = repo.getValues(); } catch (Throwable ignored) {}
+        if (v == null) v = new LinkedHashMap<String, Float>();
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"sensores\":{");
+        boolean first = true;
+        for (int i = 0; i < SENSOR_16.length; i++) {
+            Float f = v.get(SENSOR_16[i]);
+            if (f == null) continue;
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(jsonEscape(SENSOR_16[i])).append("\":").append(f.floatValue());
+        }
+        sb.append("}}");
+        return sb.toString();
+    }
+
+    /** Comportamiento en la gráfica: por cada señal elegida, mínimo/máximo/último de su historial. */
+    private String buildChartsSnapshotJson() {
+        Map<String, Float> v = null;
+        try { v = repo.getValues(); } catch (Throwable ignored) {}
+        if (v == null) v = new LinkedHashMap<String, Float>();
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"grafica\":{");
+        boolean first = true;
+        for (String sig : chosen.isEmpty() ? readableSignals() : chosen) {
+            java.util.List<Float> pts = repo.getHistory(sig);
+            if (pts == null || pts.isEmpty()) {
+                Float f = v.get(sig);
+                if (f == null) continue;
+                if (!first) sb.append(",");
+                first = false;
+                sb.append("\"").append(jsonEscape(sig)).append("\":{").append("\"actual\":").append(f.floatValue()).append("}");
+                continue;
+            }
+            float mn = pts.get(0), mx = pts.get(0);
+            for (Float p : pts) { if (p != null) { mn = Math.min(mn, p); mx = Math.max(mx, p); } }
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(jsonEscape(sig)).append("\":{")
+              .append("\"actual\":").append(pts.get(pts.size() - 1).floatValue())
+              .append(",\"min\":").append(mn)
+              .append(",\"max\":").append(mx)
+              .append(",\"puntos\":").append(pts.size())
+              .append("}");
+        }
+        sb.append("}}");
+        return sb.toString();
     }
 
     private String buildSnapshotJson() {
@@ -1197,6 +1265,22 @@ public class DiagnosticoView {
         adapterBtns = new LinearLayout(host);
         adapterBtns.setOrientation(LinearLayout.HORIZONTAL);
         card.addView(adapterBtns, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout demoRow = new LinearLayout(host);
+        demoRow.setOrientation(LinearLayout.HORIZONTAL);
+        demoRow.setGravity(Gravity.CENTER);
+        demoRow.setPadding(0, (int)(10*s), 0, 0);
+        TextView demoBtn = txt(repo.isDemo() ? "⏹ Detener simulación" : "🎛 Simular sensores (demo)", 13, TEXT(), true);
+        demoBtn.setGravity(Gravity.CENTER);
+        demoBtn.setBackground(rounded(repo.isDemo() ? ACCENT() : INNER(), 14, 0));
+        demoBtn.setTextColor(repo.isDemo() ? Color.WHITE : TEXT());
+        demoBtn.setPadding((int)(16*s),(int)(8*s),(int)(16*s),(int)(8*s));
+        demoBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            try { repo.setDemo(!repo.isDemo()); } catch (Throwable ignored) {}
+            host.toast(repo.isDemo() ? "Simulación activa" : "Simulación detenida");
+            render();
+        } });
+        demoRow.addView(demoBtn, new LinearLayout.LayoutParams(-2, -2));
+        card.addView(demoRow, new LinearLayout.LayoutParams(-1, -2));
         refreshAdapter();
     }
 
