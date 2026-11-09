@@ -712,6 +712,7 @@ public class Main extends Activity {
         buildAudioCard();
         buildTelemetryBar();
         buildDock();
+        buildFloatingAi();
 
         try { if (parked != null) parked.attach(root); } catch (Throwable ignored) {}
 
@@ -722,6 +723,207 @@ public class Main extends Activity {
         showWeather();
         if (settingsCat >= 0) showSettings(settingsCat);
     }
+
+    // ─────────────────── Botón flotante del copiloto IA (arrastrable) ───────────────────
+
+    private TextView fabAi;
+    private android.animation.ObjectAnimator fabPulse;
+    private com.fordlauncher.launcher.obd.VoiceInputManager fabVoice;
+    private com.fordlauncher.launcher.obd.CarVoiceSpeaker fabSpeaker;
+    private boolean fabMicPending;
+
+    private void buildFloatingAi() {
+        fabAi = new TextView(this);
+        fabAi.setText("🎙");
+        fabAi.setTextColor(Color.WHITE);
+        fabAi.setTextSize(24);
+        fabAi.setGravity(Gravity.CENTER);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(0xFF00C853);
+        fabAi.setBackground(g);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (54 * s), (int) (54 * s));
+        lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
+        lp.rightMargin = (int) (16 * s);
+        lp.bottomMargin = (int) (72 * s);
+        root.addView(fabAi, lp);
+        fabAi.setOnTouchListener(new View.OnTouchListener() {
+            private float iX, iY, tX, tY;
+            private boolean dragging;
+            public boolean onTouch(final View v, android.view.MotionEvent e) {
+                int act = e.getAction();
+                if (act == android.view.MotionEvent.ACTION_DOWN) {
+                    iX = v.getX(); iY = v.getY(); tX = e.getRawX(); tY = e.getRawY();
+                    dragging = false;
+                    return true;
+                }
+                if (act == android.view.MotionEvent.ACTION_MOVE) {
+                    float dx = e.getRawX() - tX, dy = e.getRawY() - tY;
+                    if (Math.hypot(dx, dy) > 10f) {
+                        dragging = true;
+                        v.setX(iX + dx);
+                        v.setY(iY + dy);
+                    }
+                    return true;
+                }
+                if (act == android.view.MotionEvent.ACTION_UP) {
+                    if (!dragging) onFabTap();
+                    else try { prefs.edit().putFloat("ai_fab_x", v.getX()).putFloat("ai_fab_y", v.getY()).apply(); } catch (Throwable ignored) {}
+                    return true;
+                }
+                return false;
+            }
+        });
+        refreshFloatingAi();
+    }
+
+    private void refreshFloatingAi() {
+        if (fabAi == null) return;
+        boolean en = true;
+        try { en = prefs.getBoolean("pref_enable_floating_ai_button", true); } catch (Throwable ignored) {}
+        fabAi.setVisibility(en ? View.VISIBLE : View.GONE);
+        if (en) {
+            float x = -1f, y = -1f;
+            try { x = prefs.getFloat("ai_fab_x", -1f); y = prefs.getFloat("ai_fab_y", -1f); } catch (Throwable ignored) {}
+            if (x != -1f && y != -1f) {
+                fabAi.setX(x);
+                fabAi.setY(y);
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fabAi.getLayoutParams();
+                lp.gravity = Gravity.TOP | Gravity.LEFT;
+                fabAi.setLayoutParams(lp);
+            } else {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fabAi.getLayoutParams();
+                lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
+                fabAi.setLayoutParams(lp);
+            }
+        }
+    }
+
+    private void onFabTap() {
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            if (checkSelfPermission("android.permission.RECORD_AUDIO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                fabMicPending = true;
+                try { requestPermissions(new String[]{"android.permission.RECORD_AUDIO"}, 101); } catch (Throwable ignored) {}
+                return;
+            }
+        }
+        startFabListening();
+    }
+
+    public void onFabMicPerm(boolean granted) {
+        if (!fabMicPending) return;
+        fabMicPending = false;
+        if (granted) startFabListening();
+        else toast("Necesito el permiso de micrófono para hablarle a la IA");
+    }
+
+    private void startFabListening() {
+        if (fabVoice == null) fabVoice = new com.fordlauncher.launcher.obd.VoiceInputManager(this);
+        fabVoice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
+            public void onQueryReady(String text) { fabAskAi(text); }
+            public void onError(String msg) {
+                stopFabPulse();
+                toast(msg);
+            }
+        });
+        if (fabAi != null) {
+            fabPulse = android.animation.ObjectAnimator.ofFloat(fabAi, "scaleX", 1f, 1.15f, 1f);
+            fabPulse.setDuration(800);
+            fabPulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            fabPulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            fabPulse.start();
+        }
+    }
+
+    private void stopFabPulse() {
+        try { if (fabPulse != null) { fabPulse.cancel(); fabPulse = null; } } catch (Throwable ignored) {}
+        if (fabAi != null) { try { fabAi.setScaleX(1f); fabAi.setScaleY(1f); } catch (Throwable ignored) {} }
+    }
+
+    private void fabAskAi(final String pregunta) {
+        if (pregunta == null || pregunta.trim().length() == 0) { stopFabPulse(); return; }
+        final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
+        String snap = fabSnapshot();
+        toast("Consultando…");
+        com.fordlauncher.launcher.obd.GeminiDiagnosticClient.analyze(this, snap, task, false, new com.fordlauncher.launcher.obd.GeminiDiagnosticClient.Callback() {
+            public void onDone(final String text, final String error) {
+                h.post(new Runnable() {
+                    public void run() {
+                        stopFabPulse();
+                        if (error != null || text == null) {
+                            toast(error != null ? error : "Sin respuesta de la IA");
+                            return;
+                        }
+                        if (fabSpeaker == null) fabSpeaker = new com.fordlauncher.launcher.obd.CarVoiceSpeaker(Main.this);
+                        try { fabSpeaker.speak(text); } catch (Throwable ignored) {}
+                        showFabTextBubble(text);
+                        refreshFloatingAi();
+                    }
+                });
+            }
+        });
+    }
+
+    private String fabSnapshot() {
+        try {
+            StringBuilder sb = new StringBuilder("{");
+            java.util.Map<String, Float> v = getObdRepo() != null ? getObdRepo().getValues() : null;
+            if (v != null) {
+                boolean f = true;
+                String[] keys = {com.fordlauncher.launcher.obd.Pids.RPM, com.fordlauncher.launcher.obd.Pids.COOLANT, com.fordlauncher.launcher.obd.Pids.SPEED, com.fordlauncher.launcher.obd.Pids.FUEL_RATE, com.fordlauncher.launcher.obd.Pids.VOLTAGE, com.fordlauncher.launcher.obd.Pids.FUEL};
+                for (String k : keys) {
+                    Float x = v.get(k);
+                    if (x == null) continue;
+                    if (!f) sb.append(",");
+                    f = false;
+                    sb.append("\"").append(k).append("\":").append(x.floatValue());
+                }
+            }
+            sb.append("}");
+            return sb.toString();
+        } catch (Throwable t) { return "{}"; }
+    }
+
+    /** Burbuja pequeña con la respuesta de la IA: texto oculto + botón "👁 Mostrar texto". */
+    private void showFabTextBubble(final String text) {
+        try {
+            if (fabBubble != null && fabBubble.getParent() == root) root.removeView(fabBubble);
+        } catch (Throwable ignored) {}
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(CARD, 12));
+        card.setPadding((int) (12 * s), (int) (10 * s), (int) (12 * s), (int) (10 * s));
+        TextView r = tv(text, 12, TEXT, false);
+        r.setVisibility(View.GONE); // oculto: se lee en voz alta
+        card.addView(r, new LinearLayout.LayoutParams(-1, -2));
+        TextView tg = tv("👁 Mostrar texto", 11, MUTED, true);
+        tg.setGravity(Gravity.RIGHT);
+        tg.setPadding(0, (int) (2 * s), 0, 0);
+        tg.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                boolean show = r.getVisibility() != View.VISIBLE;
+                r.setVisibility(show ? View.VISIBLE : View.GONE);
+                tg.setText(show ? "👁 Ocultar texto" : "👁 Mostrar texto");
+            }
+        });
+        card.addView(tg, new LinearLayout.LayoutParams(-1, -2));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (300 * s), -2);
+        lp.gravity = Gravity.TOP | Gravity.LEFT;
+        float bx = 12 * s, by = Math.max(12 * s, (fabAi != null ? fabAi.getY() - 140 * s : 100 * s));
+        lp.leftMargin = (int) bx;
+        lp.topMargin = (int) by;
+        root.addView(card, lp);
+        card.bringToFront();
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) {
+                try { if (v.getParent() == root) root.removeView(v); } catch (Throwable ignored) {}
+                return true;
+            }
+        });
+        fabBubble = card;
+    }
+
+    private LinearLayout fabBubble;
 
     private void buildTop() {
         LinearLayout row = new LinearLayout(this);
