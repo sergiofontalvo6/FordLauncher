@@ -33,11 +33,19 @@ public class GeminiDiagnosticClient {
     }
 
     public static void analyze(final Context ctx, final String jsonSnapshot, final String task, final Callback callback) {
+        analyze(ctx, jsonSnapshot, task, false, callback);
+    }
+
+    /** @param detailed true: respuesta "uno por uno" (un sensor por línea) con más tokens. */
+    public static void analyze(final Context ctx, final String jsonSnapshot, final String task, final boolean detailed, final Callback callback) {
         final String key = apiKey(ctx);
         final String snap = jsonSnapshot == null ? "{}" : jsonSnapshot;
         final String taskText = task != null && task.length() > 0
                 ? task
                 : "Analiza estos datos OBD2 y códigos de falla";
+        final String detailNote = detailed
+                ? " Explica uno por uno en lineas cortas. Mas de 400 palabras si hace falta, sin asteriscos ni vinetas complejas."
+                : " Explica en espanol en exactamente 3 puntos concretos, claros y breves (maximo 65 palabras en total): 1. Diagnostico exacto del problema. 2. Nivel de gravedad (Bajo/Medio/Alto). 3. Que revisar o reparar en el taller. No uses asteriscos, vinetas complejas ni tecnicismos confusos.";
         POOL.execute(new Runnable() {
             public void run() {
                 if (key.length() == 0) {
@@ -51,12 +59,12 @@ public class GeminiDiagnosticClient {
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
                     String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta. " + taskText + ": " + snap
-                            + ". Explica en espanol en exactamente 3 puntos concretos, claros y breves (maximo 65 palabras en total): 1. Diagnostico exacto del problema. 2. Nivel de gravedad (Bajo/Medio/Alto). 3. Que revisar o reparar en el taller. No uses asteriscos, vinetas complejas ni tecnicismos confusos.";
+                            + ". " + detailNote;
                     StringBuilder b = new StringBuilder();
                     b.append("{\"contents\":[{\"parts\":[{\"text\":\"");
                     b.append(escape(prompt));
                     b.append("\"}]}]"); // cierra text, parte, parts y contenido
-                    b.append(",\"generationConfig\":{\"maxOutputTokens\":250}}");
+                    b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 900 : 250) + "}}");
                     final byte[] body = b.toString().getBytes("UTF-8");
                     final String reqUrl = url;
                     // Plazo total: 2 intentos de 20 s (fábrica propia + sistema) en

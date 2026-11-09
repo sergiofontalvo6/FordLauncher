@@ -106,8 +106,8 @@ public class DiagnosticoView {
 
     // Diagnóstico inteligente IA (Gemini + voz)
     private static final String AI_TASK_DEFAULT = "Analiza estos datos OBD2 y códigos de falla";
-    private static final String AI_TASK_SENSORS = "Analiza el comportamiento de todos mis sensores y encuentra anomalías";
-    private static final String AI_TASK_CHARTS = "Analiza el comportamiento de mis sensores en la gráfica y encuentra anomalías";
+    private static final String AI_TASK_SENSORS = "Para cada uno de estos sensores indica en una línea: nombre, su función en el motor y si su comportamiento es normal o una anomalía (escribe ANOMALÍA cuando aplique)";
+    private static final String AI_TASK_CHARTS = "Para cada uno de estos sensores seleccionados en la gráfica indica en una línea: nombre, su función y su comportamiento en la gráfica (sube, baja o estable), marcando ANOMALÍA cuando aplique";
     private CarVoiceSpeaker speaker;
     private EdgeVoiceSpeaker edgeSpeaker;
     private String edgeSpeakerVoice;
@@ -675,7 +675,8 @@ public class DiagnosticoView {
         String snap = buildAiSnapshot(task);
         setAiBusy(true);
         if (aiResult != null) aiResult.setText("Consultando telemetría...");
-        GeminiDiagnosticClient.analyze(host, snap, task, new GeminiDiagnosticClient.Callback(){
+        boolean detailed = AI_TASK_SENSORS.equals(task) || AI_TASK_CHARTS.equals(task);
+        GeminiDiagnosticClient.analyze(host, snap, task, detailed, new GeminiDiagnosticClient.Callback(){
             public void onDone(final String text, final String error) {
                 ui.post(new Runnable(){ public void run(){
                     setAiBusy(false);
@@ -1182,7 +1183,7 @@ public class DiagnosticoView {
             chip.setMaxLines(1);
             chip.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
                 if (chosen.contains(sig)) chosen.remove(sig);
-                else if (chosen.size() < 2) chosen.add(sig);
+                else if (chosen.size() < 10) chosen.add(sig);
                 else { chosen.remove(0); chosen.add(sig); }
                 touchFrac = null;
                 buildChips();
@@ -1194,10 +1195,12 @@ public class DiagnosticoView {
         }
     }
 
+    private static final int[] CHART_COLORS = {0xFFF44336, 0xFF4CA6FF, 0xFF9CCC65, 0xFFEAC54F, 0xFFBA68C8, 0xFF4DD0E1, 0xFFFF8A65, 0xFFA1887F, 0xFFF06292, 0xFFD29922};
+
     private int chartColor(int i) {
         if (i == 0) return ACCENT();
         if (i == 1) return CHART2;
-        return WARN;
+        return CHART_COLORS[i % CHART_COLORS.length];
     }
 
     private void refreshCharts() {
@@ -1242,7 +1245,9 @@ public class DiagnosticoView {
             chartLegend.addView(row, new LinearLayout.LayoutParams(-1, -2));
         }
         chartView.setSeries(series);
-        chartView.setColors(new int[]{chartColor(0), chartColor(1)});
+        int[] cc = new int[series.size()];
+        for (int i = 0; i < series.size(); i++) cc[i] = chartColor(i);
+        chartView.setColors(cc);
         chartView.setTouch(touchFrac);
         chartView.invalidate();
     }
