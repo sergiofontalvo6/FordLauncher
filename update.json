@@ -1,6 +1,6 @@
 {
-  "version": "2.10.5",
-  "notes": "## FordLauncher 2.10.5 — Botón flotante del copiloto IA + voz por micrófono\n\n### Novedades\n- **Botón flotante del copiloto IA** (FAB verde, flotando sobre el Home): **arrastrable** a cualquier esquina (su posición se guarda y se restaura al reiniciar la app). Al tocarlo, escucha tu pregunta por voz y la IA responde hablando.\n- **Preguntas por micrófono** también en la tarjeta del Taller (botón 🎙 en la cabecera, con pulso verde mientras escucha): dicta en español y la respuesta se lee en voz alta, con la memoria de la conversación.\n- **Texto oculto tras la respuesta por voz**: aparece el botón \"👁 Mostrar texto\" para desplegar la transcripción cuando quieras.\n- **Ajustes → Copiloto IA**: nuevo interruptor \"Botón flotante de copiloto IA\" para mostrarlo u ocultarlo cuando quieras.\n\n### Corregido\n- Los botones \"Analizar con IA\" / \"Escuchar\" ahora son **compactos y fijos en la cabecera** de la tarjeta IA, encima del texto generado.\n- La IA saluda con **tu nombre y tu vehículo** desde Ajustes, en vez de \"Hola jefe\".\n",
-  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.5",
-  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.5/FordLauncher-2.10.5.apk"
+  "version": "2.10.6",
+  "notes": "## FordLauncher 2.10.6 — Autoconexión OBD al arrancar\n\n### Novedades\n- **El OBD se conecta solo al iniciar el launcher**: ya no hay que entrar a la pestaña Diagnóstico para que conecte al ELM327 Bluetooth — se intenta conectar apenas arranca la app.\n- **Sin direcciones MAC en los avisos**: textos limpios (\"Conectar al ELM327\", \"Conectando al ELM327…\", \"Conectado al ELM327\").\n",
+  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.6",
+  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.6/FordLauncher-2.10.6.apk"
 }
