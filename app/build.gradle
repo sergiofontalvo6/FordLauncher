@@ -16,8 +16,8 @@ android {
         minSdk 16
         // 28 a propósito: mantiene el comportamiento probado en pantallas viejas y nuevas.
         targetSdk 28
-        versionCode 34
-        versionName '2.10.1'
+        versionCode 35
+        versionName '2.10.2'
     }
 
     signingConfigs {
@@ -39,8 +39,8 @@ android {
             if (ksPath) signingConfig signingConfigs.release
         }
         debug {
-            applicationIdSuffix '.debug'
-            versionNameSuffix '-debug'
+            // Sin applicationIdSuffix: debug y release comparten el mismo paquete
+            // para que las actualizaciones se instalen sobre la app existente.
         }
     }
 
