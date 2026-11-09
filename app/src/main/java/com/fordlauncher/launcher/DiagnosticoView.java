@@ -1413,7 +1413,7 @@ public class DiagnosticoView {
         adapterStatus = txt("", 14, TEXT(), true);
         adapterStatus.setMaxLines(2);
         card.addView(adapterStatus, new LinearLayout.LayoutParams(-1, -2));
-        adapterHelp = txt("Empareja el ELM327 (ej. " + ObdRepository.DEFAULT_MAC + ") en Ajustes de Android. Bluetooth SPP con ATZ/ATE0/ATL0/ATS0/ATH0/ATAT1/ATSP0.", 12, MUTED(), false);
+        adapterHelp = txt("Empareja el ELM327 en Ajustes de Android. Bluetooth SPP con ATZ/ATE0/ATL0/ATS0/ATH0/ATAT1/ATSP0.", 12, MUTED(), false);
         adapterHelp.setPadding(0, (int)(4*s), 0, (int)(8*s));
         card.addView(adapterHelp, new LinearLayout.LayoutParams(-1, -2));
         adapterBtns = new LinearLayout(host);
@@ -1444,8 +1444,8 @@ public class DiagnosticoView {
         String status;
         int color;
         if (st == ObdRepository.State.OFF) { status = "Sin adaptador"; color = MUTED(); }
-        else if (st == ObdRepository.State.CONNECTING) { status = "Conectando a " + repo.targetOrDefault() + "…"; color = TEXT(); }
-        else if (st == ObdRepository.State.ON) { status = "Conectado a " + repo.targetOrDefault() + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " · " + repo.getAdapter() : ""); color = GOOD; }
+        else if (st == ObdRepository.State.CONNECTING) { status = "Conectando al ELM327…"; color = TEXT(); }
+        else if (st == ObdRepository.State.ON) { status = "Conectado al ELM327" + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " · " + repo.getAdapter() : ""); color = GOOD; }
         else { status = "Error: " + (repo.getError() != null ? repo.getError() : "sin respuesta"); color = DANGER; }
         adapterStatus.setText(status);
         adapterStatus.setTextColor(color);
@@ -1456,7 +1456,7 @@ public class DiagnosticoView {
             button(adapterBtns, "Desconectar", false, new Runnable(){ public void run(){ repo.disconnect(); } });
             button(adapterBtns, "Usar otro", false, new Runnable(){ public void run(){ repo.disconnect(); showPairedDialog(); } });
         } else {
-            button(adapterBtns, "Conectar (" + repo.targetOrDefault() + ")", true, new Runnable(){ public void run(){ repo.connect(null); } });
+            button(adapterBtns, "Conectar al ELM327", true, new Runnable(){ public void run(){ repo.connect(null); } });
             button(adapterBtns, "Buscar Bluetooth", false, new Runnable(){ public void run(){ showPairedDialog(); } });
         }
         // lista de emparejados como chips

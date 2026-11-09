@@ -220,6 +220,8 @@ public class Main extends Activity {
             if (ll != null) { wLat = ll.getLatitude(); wLon = ll.getLongitude(); }
         } catch (Throwable ignored) { }
         loadApps();
+        // Conectar al ELM327 automáticamente al arrancar el launcher (sin tener que abrir Diagnóstico).
+        try { getObdRepo().connect(null); } catch (Throwable ignored) {}
 
         IntentFilter f = new IntentFilter();
         f.addAction(Intent.ACTION_PACKAGE_ADDED);
