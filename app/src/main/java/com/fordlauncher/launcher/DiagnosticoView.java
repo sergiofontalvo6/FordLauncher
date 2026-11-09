@@ -56,7 +56,7 @@ public class DiagnosticoView {
     private static final int CHART2 = 0xFF4CA6FF;
     private static final int SERIES_POINTS = 60; // historial del repositorio (3600ms aprox)
 
-    private static final String[] TAB_NAMES = {"Salud", "Códigos de falla", "Sensores", "Gráficas", "Más"};
+    private static final String[] TAB_NAMES = {"Salud", "CÃ³digos de falla", "Sensores", "GrÃ¡ficas", "MÃ¡s"};
     private int currentTab;
     private Health.EngineReport report;
     private boolean reading;
@@ -104,10 +104,10 @@ public class DiagnosticoView {
     private TextView accelBest;
     private LinearLayout tripsCol;
 
-    // Diagnóstico inteligente IA (Gemini + voz)
-    private static final String AI_TASK_DEFAULT = "Analiza estos datos OBD2 y códigos de falla";
-    private static final String AI_TASK_SENSORS = "Para cada uno de estos sensores indica en una línea: nombre, su función en el motor y si su comportamiento es normal o una anomalía (escribe ANOMALÍA cuando aplique)";
-    private static final String AI_TASK_CHARTS = "Para cada uno de estos sensores seleccionados en la gráfica indica en una línea: nombre, su función y su comportamiento en la gráfica (sube, baja o estable), marcando ANOMALÍA cuando aplique";
+    // DiagnÃ³stico inteligente IA (Gemini + voz)
+    private static final String AI_TASK_DEFAULT = "Analiza estos datos OBD2 y cÃ³digos de falla";
+    private static final String AI_TASK_SENSORS = "Para cada uno de estos sensores indica en una lÃ­nea: nombre, su funciÃ³n en el motor y si su comportamiento es normal o una anomalÃ­a (escribe ANOMALÃA cuando aplique). Compara cada valor con sus parÃ¡metros normales incluidos en los datos (campo ref)";
+    private static final String AI_TASK_CHARTS = "Para cada uno de estos sensores seleccionados en la grÃ¡fica indica en una lÃ­nea: nombre, su funciÃ³n y su comportamiento en la grÃ¡fica (sube, baja o estable). Compara cada valor con sus parÃ¡metros normales incluidos en los datos (campo ref) y marca ANOMALÃA cuando salga de rango";
     private CarVoiceSpeaker speaker;
     private EdgeVoiceSpeaker edgeSpeaker;
     private String edgeSpeakerVoice;
@@ -117,7 +117,33 @@ public class DiagnosticoView {
     private TextView aiAnalyzeBtn;
     private TextView aiSpeakBtn;
     private String lastAiText;
+    private final java.util.Map<String, String> aiLastByMode = new java.util.LinkedHashMap<String, String>();
     private boolean aiBusy;
+
+    /** Rangos normales/anormales de referencia por seÃ±al (Ford Fiesta, motor 1.6). */
+    private static String refFor(String sig) {
+        if (Pids.RPM.equals(sig)) return "normal 780-900 rpm en ralantÃ­";
+        if (Pids.COOLANT.equals(sig)) return "normal 85-105 Â°C; anomalÃ­a >115 Â°C";
+        if (Pids.VOLTAGE.equals(sig)) return "normal 13,5-14,8 V con motor encendido; anomalÃ­a <12,4 V o >15 V";
+        if (Pids.SPEED.equals(sig)) return "0 km/h detenido; coincide con GPS";
+        if (Pids.LOAD.equals(sig)) return "normal 20-30 % en ralantÃ­";
+        if (Pids.INTAKE.equals(sig)) return "normal: ambient +10 a +25 Â°C";
+        if (Pids.MAP.equals(sig)) return "normal 28-35 kPa en ralantÃ­";
+        if (Pids.MAF.equals(sig)) return "normal 2-4 g/s en ralantÃ­ (1.6 L)";
+        if (Pids.THROTTLE.equals(sig)) return "0 % en ralantÃ­";
+        if (Pids.FUEL.equals(sig)) return "0-100 %; baja si consume";
+        if (Pids.OIL.equals(sig)) return "normal 85-110 Â°C";
+        if (Pids.FUEL_TRIM_SHORT.equals(sig)) return "normal Â±10 %; anomalÃ­a >Â±25 %";
+        if (Pids.FUEL_TRIM_LONG.equals(sig)) return "normal Â±10 %; anomalÃ­a >Â±25 % (mezcla pobre/rica)";
+        if (Pids.TIMING.equals(sig)) return "normal 8-15 grados en ralantÃ­";
+        if (Pids.O2S11.equals(sig)) return "normal: oscilando 0,1-0,9 V; anomalÃ­a si plano o clavado (ej. 0,45 V fijo)";
+        if (Pids.O2S12.equals(sig)) return "normal: oscilando 0,1-0,6 V tras catalizador";
+        if (Pids.BARO.equals(sig)) return "normal ~baromÃ©trica (85-105 kPa)";
+        if (Pids.AMBIENT.equals(sig)) return "ambiente del exterior";
+        if (Pids.CAT_TEMP.equals(sig)) return "normal 400-700 Â°C";
+        if (Pids.RUN_TIME.equals(sig)) return "crece con el motor encendido";
+        return "";
+    }
 
     private static final class TileW {
         View dot;
@@ -355,7 +381,7 @@ public class DiagnosticoView {
         View dot = new View(host);
         dot.setBackground(rounded(MUTED(), 5, 0));
         head.addView(dot, new LinearLayout.LayoutParams((int)(8*s),(int)(8*s)));
-        TextView name = txt("● " + zoneName(z), 11, MUTED(), false);
+        TextView name = txt("â— " + zoneName(z), 11, MUTED(), false);
         name.setMaxLines(1);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         name.setPadding((int)(6*s), 0, 0, 0);
@@ -409,11 +435,11 @@ public class DiagnosticoView {
             case ENGINE: return "Motor";
             case INTAKE: return "Combustible y aire";
             case COOLING: return "Enfriamiento";
-            case BATTERY: return "Batería y carga";
-            case TRANSMISSION: return "Transmisión";
+            case BATTERY: return "BaterÃ­a y carga";
+            case TRANSMISSION: return "TransmisiÃ³n";
             case EXHAUST: return "Emisiones";
             case WHEELS: return "Ruedas";
-            case BODY: return "Carrocería";
+            case BODY: return "CarrocerÃ­a";
             default: return z.name();
         }
     }
@@ -458,7 +484,7 @@ public class DiagnosticoView {
         }
         String text; int color;
         if (!connected) { text = "Conecta tu adaptador"; color = MUTED(); }
-        else if (reading && !known) { text = "Leyendo…"; color = MUTED(); }
+        else if (reading && !known) { text = "Leyendoâ€¦"; color = MUTED(); }
         else if (issues == 0 && known) { text = "Todo bien"; color = GOOD; }
         else if (issues > 0) { text = issues == 1 ? "1 aviso" : (issues + " avisos"); color = fault ? DANGER : WARN; }
         else { text = "Sin datos"; color = MUTED(); }
@@ -475,7 +501,7 @@ public class DiagnosticoView {
                 if (ad != null && ad.length() > 0) parts.add(ad);
                 if (vin != null && vin.length() > 0) parts.add("VIN " + vin);
                 StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < parts.size(); i++) { if (i > 0) sb.append(" · "); sb.append(parts.get(i)); }
+                for (int i = 0; i < parts.size(); i++) { if (i > 0) sb.append(" Â· "); sb.append(parts.get(i)); }
                 summaryLine.setText(sb.toString());
                 summaryLine.setVisibility(sb.length() > 0 ? View.VISIBLE : View.GONE);
             } else {
@@ -497,8 +523,8 @@ public class DiagnosticoView {
             String word;
             switch (h.level) {
                 case FAULT: word = "Falla"; break;
-                case WARN: word = "Atención"; break;
-                case UNKNOWN: word = "—"; break;
+                case WARN: word = "AtenciÃ³n"; break;
+                case UNKNOWN: word = "â€”"; break;
                 default:
                     if (value != null && sig != null) word = sensorText(sig, value);
                     else word = "Bien";
@@ -509,8 +535,8 @@ public class DiagnosticoView {
             else if (h.level == Health.HealthLevel.UNKNOWN) w.value.setTextColor(MUTED());
             else w.value.setTextColor(c);
             String detail = null;
-            if (!h.codes.isEmpty()) detail = join(h.codes, " · ");
-            else if (!h.pendingCodes.isEmpty()) detail = join(h.pendingCodes, " · ") + " · pendiente";
+            if (!h.codes.isEmpty()) detail = join(h.codes, " Â· ");
+            else if (!h.pendingCodes.isEmpty()) detail = join(h.pendingCodes, " Â· ") + " Â· pendiente";
             else if (h.level == Health.HealthLevel.WARN && h.alert == null) detail = "Luz MIL";
             else if (h.alert != null && value != null && sig != null) detail = sensorText(sig, value);
             else if (h.zone == Health.Zone.EXHAUST && rep != null && rep.readiness != null) {
@@ -554,25 +580,26 @@ public class DiagnosticoView {
         }}).start();
     }
 
-    // ---------- DIAGNÓSTICO INTELIGENTE IA (Gemini + voz) ----------
+    // ---------- DIAGNÃ“STICO INTELIGENTE IA (Gemini + voz) ----------
     private void buildAiCard(LinearLayout col) {
         buildAiCard(col, AI_TASK_DEFAULT);
     }
 
     private void buildAiCard(LinearLayout col, final String task) {
-        LinearLayout card = card(col, "Diagnóstico inteligente IA");
+        LinearLayout card = card(col, "DiagnÃ³stico inteligente IA");
         aiStatus = txt("", 12, MUTED(), false);
         aiStatus.setVisibility(View.GONE);
         aiStatus.setPadding(0, (int)(4*s), 0, 0);
         card.addView(aiStatus, new LinearLayout.LayoutParams(-1, -2));
-        aiResult = txt("Toca «Analizar con IA» para combinar DTCs y sensores con Gemini.", 13, TEXT(), false);
-        if (lastAiText != null) aiResult.setText(lastAiText);
+        aiResult = txt("Toca Â«Analizar con IAÂ» para combinar DTCs y sensores con Gemini.", 13, TEXT(), false);
+        String prev = aiLastByMode.get(task);
+        if (prev != null) aiResult.setText(prev);
         aiResult.setPadding(0, (int)(4*s), 0, (int)(8*s));
         card.addView(aiResult, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         aiAnalyzeBtn = button(row, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(task); } });
-        aiSpeakBtn = button(row, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
+        aiSpeakBtn = button(row, "ðŸ”Š Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
         card.addView(row, new LinearLayout.LayoutParams(-1, -2));
         updateAiSpeakLabel();
     }
@@ -583,7 +610,7 @@ public class DiagnosticoView {
 
     private void updateAiSpeakLabel() {
         if (aiSpeakBtn == null) return;
-        aiSpeakBtn.setText(anySpeaking() ? "⏹ Detener" : "🔊 Escuchar");
+        aiSpeakBtn.setText(anySpeaking() ? "â¹ Detener" : "ðŸ”Š Escuchar");
     }
 
     private String edgeVoiceName() {
@@ -664,7 +691,7 @@ public class DiagnosticoView {
     private void setAiBusy(boolean busy) {
         aiBusy = busy;
         if (aiStatus != null) {
-            aiStatus.setText(busy ? "Consultando telemetría..." : "");
+            aiStatus.setText(busy ? "Consultando telemetrÃ­a..." : "");
             aiStatus.setVisibility(busy ? View.VISIBLE : View.GONE);
         }
         if (aiAnalyzeBtn != null) aiAnalyzeBtn.setEnabled(!busy);
@@ -674,7 +701,7 @@ public class DiagnosticoView {
         if (aiBusy) return;
         String snap = buildAiSnapshot(task);
         setAiBusy(true);
-        if (aiResult != null) aiResult.setText("Consultando telemetría...");
+        if (aiResult != null) aiResult.setText("Consultando telemetrÃ­a...");
         boolean detailed = AI_TASK_SENSORS.equals(task) || AI_TASK_CHARTS.equals(task);
         GeminiDiagnosticClient.analyze(host, snap, task, detailed, new GeminiDiagnosticClient.Callback(){
             public void onDone(final String text, final String error) {
@@ -687,6 +714,7 @@ public class DiagnosticoView {
                         return;
                     }
                     lastAiText = text;
+                    aiLastByMode.put(task, text);
                     if (aiResult != null) aiResult.setText(text);
                     updateAiSpeakLabel();
                     try {
@@ -697,14 +725,14 @@ public class DiagnosticoView {
         });
     }
 
-    /** Snapshot según la pestaña: DTC (Salud/Códigos), sensores actuales (Sensores) o serie de gráfica (Gráficas). */
+    /** Snapshot segÃºn la pestaÃ±a: DTC (Salud/CÃ³digos), sensores actuales (Sensores) o serie de grÃ¡fica (GrÃ¡ficas). */
     private String buildAiSnapshot(String task) {
         if (AI_TASK_SENSORS.equals(task)) return buildSensorsSnapshotJson();
         if (AI_TASK_CHARTS.equals(task)) return buildChartsSnapshotJson();
         return buildSnapshotJson();
     }
 
-    /** Todos los sensores de la pestaña Sensores con su valor actual. */
+    /** Todos los sensores de la pestaÃ±a Sensores con su valor actual y su rango normal de referencia. */
     private String buildSensorsSnapshotJson() {
         Map<String, Float> v = null;
         try { v = repo.getValues(); } catch (Throwable ignored) {}
@@ -718,13 +746,15 @@ public class DiagnosticoView {
             if (f == null) continue;
             if (!first) sb.append(",");
             first = false;
-            sb.append("\"").append(jsonEscape(SENSOR_16[i])).append("\":").append(f.floatValue());
+            String entry = "\"" + jsonEscape(sensorName(SENSOR_16[i])) + "\":" + "{\"actual\":" + f.floatValue() + ",\"ref\":\"" + jsonEscape(refFor(SENSOR_16[i])) + "\"}";
+            sb.append(entry);
+
         }
         sb.append("}}");
         return sb.toString();
     }
 
-    /** Comportamiento en la gráfica: por cada señal elegida, mínimo/máximo/último de su historial. */
+    /** Comportamiento en la grÃ¡fica: por cada seÃ±al elegida, mÃ­nimo/mÃ¡ximo/Ãºltimo de su historial y su rango normal de referencia. */
     private String buildChartsSnapshotJson() {
         Map<String, Float> v = null;
         try { v = repo.getValues(); } catch (Throwable ignored) {}
@@ -735,24 +765,26 @@ public class DiagnosticoView {
         boolean first = true;
         for (String sig : chosen.isEmpty() ? readableSignals() : chosen) {
             java.util.List<Float> pts = repo.getHistory(sig);
+            String name = sensorName(sig);
+            String ref = refFor(sig);
             if (pts == null || pts.isEmpty()) {
                 Float f = v.get(sig);
                 if (f == null) continue;
                 if (!first) sb.append(",");
                 first = false;
-                sb.append("\"").append(jsonEscape(sig)).append("\":{").append("\"actual\":").append(f.floatValue()).append("}");
+                sb.append("\"").append(jsonEscape(name)).append("\":{").append("\"actual\":").append(f.floatValue()).append(",\"ref\":\"").append(jsonEscape(ref)).append("\"}");
                 continue;
             }
             float mn = pts.get(0), mx = pts.get(0);
             for (Float p : pts) { if (p != null) { mn = Math.min(mn, p); mx = Math.max(mx, p); } }
             if (!first) sb.append(",");
             first = false;
-            sb.append("\"").append(jsonEscape(sig)).append("\":{")
+            sb.append("\"").append(jsonEscape(name)).append("\":{")
               .append("\"actual\":").append(pts.get(pts.size() - 1).floatValue())
               .append(",\"min\":").append(mn)
               .append(",\"max\":").append(mx)
               .append(",\"puntos\":").append(pts.size())
-              .append("}");
+              .append(",\"ref\":\"").append(jsonEscape(ref)).append("\"}");
         }
         sb.append("}}");
         return sb.toString();
@@ -825,8 +857,8 @@ public class DiagnosticoView {
 
     // ---------- CODIGOS (Workshop.kt CodesCard + InspectionCard) ----------
     private void buildCodesCard(LinearLayout col) {
-        LinearLayout card = card(col, "Códigos de falla");
-        TextView help = txt("Toque a un código para ver dónde está en el auto. Borrar reinicia la verificación.", 12, MUTED(), false);
+        LinearLayout card = card(col, "CÃ³digos de falla");
+        TextView help = txt("Toque a un cÃ³digo para ver dÃ³nde estÃ¡ en el auto. Borrar reinicia la verificaciÃ³n.", 12, MUTED(), false);
         help.setPadding(0, (int)(4*s), 0, (int)(8*s));
         card.addView(help, new LinearLayout.LayoutParams(-1, -2));
         codesBody = txt("", 13, TEXT(), false);
@@ -838,13 +870,13 @@ public class DiagnosticoView {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, (int)(6*s), 0, 0);
-        button(row, "Borrar códigos", false, new Runnable(){ public void run(){ confirmClear(); } });
+        button(row, "Borrar cÃ³digos", false, new Runnable(){ public void run(){ confirmClear(); } });
         button(row, "Leer de nuevo", false, new Runnable(){ public void run(){ readReport(); } });
         card.addView(row, new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void buildInspectionCard(LinearLayout col) {
-        LinearLayout card = card(col, "¿Pasas la verificación?");
+        LinearLayout card = card(col, "Â¿Pasas la verificaciÃ³n?");
         inspectPass = txt("", 15, TEXT(), true);
         inspectPass.setMaxLines(2);
         card.addView(inspectPass, new LinearLayout.LayoutParams(-1, -2));
@@ -858,20 +890,20 @@ public class DiagnosticoView {
         if (codesBody == null) return;
         Health.EngineReport r = report != null ? report : repo.getLastReport();
         if (reading && r == null) {
-            codesBody.setText("Leyendo…");
+            codesBody.setText("Leyendoâ€¦");
         } else if (r == null) {
-            codesBody.setText("Sin reporte. Toca «Leer de nuevo».");
+            codesBody.setText("Sin reporte. Toca Â«Leer de nuevoÂ».");
         } else {
             Map<String, Set<String>> grouped = new LinkedHashMap<String, Set<String>>();
             for (String c : r.stored) addKind(grouped, c, "Guardado");
             if (r.permanent != null) for (String c : r.permanent) addKind(grouped, c, "Permanente");
             for (String c : r.pending) addKind(grouped, c, "Pendiente");
             if (grouped.isEmpty()) {
-                codesBody.setText("Sin códigos. MIL: " + (r.readiness != null ? (r.readiness.mil ? "ENCENDIDA" : "apagada") : "?"));
+                codesBody.setText("Sin cÃ³digos. MIL: " + (r.readiness != null ? (r.readiness.mil ? "ENCENDIDA" : "apagada") : "?"));
             } else {
                 StringBuilder sb = new StringBuilder();
                 for (Map.Entry<String, Set<String>> e : grouped.entrySet()) {
-                    sb.append("• ").append(e.getKey()).append(" — ").append(Codes.describe(e.getKey())).append("\n  ").append(join(new ArrayList<String>(e.getValue()), " · ")).append(" · ").append(zoneName(Health.zoneOf(e.getKey()))).append("\n");
+                    sb.append("â€¢ ").append(e.getKey()).append(" â€” ").append(Codes.describe(e.getKey())).append("\n  ").append(join(new ArrayList<String>(e.getValue()), " Â· ")).append(" Â· ").append(zoneName(Health.zoneOf(e.getKey()))).append("\n");
                 }
                 codesBody.setText(sb.toString().trim());
             }
@@ -879,13 +911,13 @@ public class DiagnosticoView {
         if (inspectPass != null && monitorsCol != null) {
             monitorsCol.removeAllViews();
             if (r == null || r.readiness == null) {
-                inspectPass.setText(reading ? "Leyendo…" : "Sin datos de monitores.");
+                inspectPass.setText(reading ? "Leyendoâ€¦" : "Sin datos de monitores.");
                 inspectPass.setTextColor(MUTED());
             } else {
                 Pids.Readiness rd = r.readiness;
                 int incomplete = rd.incomplete().size();
                 boolean pass = !rd.mil && incomplete <= 1;
-                inspectPass.setText(pass ? "Pasaría la verificación" : "No pasaría la verificación");
+                inspectPass.setText(pass ? "PasarÃ­a la verificaciÃ³n" : "No pasarÃ­a la verificaciÃ³n");
                 inspectPass.setTextColor(pass ? GOOD : DANGER);
                 for (Pids.Monitor m : rd.monitors) {
                     monitorsCol.addView(monitorRow(m), new LinearLayout.LayoutParams(-1, -2));
@@ -927,7 +959,7 @@ public class DiagnosticoView {
         if ("COMPONENTS".equals(n)) return "Componentes";
         if ("CATALYST".equals(n)) return "Catalizador";
         if ("HEATED_CATALYST".equals(n)) return "Catalizador calorizado";
-        if ("EVAP".equals(n)) return "Evaporación";
+        if ("EVAP".equals(n)) return "EvaporaciÃ³n";
         if ("SECONDARY_AIR".equals(n)) return "Aire secundario";
         if ("O2_SENSOR".equals(n)) return "Sensor O2";
         if ("O2_HEATER".equals(n)) return "Calentador O2";
@@ -938,17 +970,17 @@ public class DiagnosticoView {
     private void confirmClear() {
         final Health.EngineReport r = report != null ? report : repo.getLastReport();
         if (r == null || (r.stored.isEmpty() && r.pending.isEmpty() && (r.readiness == null || !r.readiness.mil))) {
-            if (codesCleared != null) { codesCleared.setText("No hay códigos para borrar."); codesCleared.setVisibility(View.VISIBLE); }
+            if (codesCleared != null) { codesCleared.setText("No hay cÃ³digos para borrar."); codesCleared.setVisibility(View.VISIBLE); }
             return;
         }
         new AlertDialog.Builder(host, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Borrar códigos")
-            .setMessage("¿Seguro? Borrar también reinicia los monitores de la verificación.")
-            .setPositiveButton("Sí, borrar", new DialogInterface.OnClickListener(){
+            .setTitle("Borrar cÃ³digos")
+            .setMessage("Â¿Seguro? Borrar tambiÃ©n reinicia los monitores de la verificaciÃ³n.")
+            .setPositiveButton("SÃ­, borrar", new DialogInterface.OnClickListener(){
                 public void onClick(DialogInterface d, int w) {
                     new Thread(new Runnable(){ public void run(){
                         try { repo.clearCodes(); } catch (Throwable ignored) {}
-                        try { final Health.EngineReport nr = repo.report(); ui.post(new Runnable(){ public void run(){ report = nr; if (codesCleared != null) { codesCleared.setText("Códigos borrados."); codesCleared.setVisibility(View.VISIBLE); } refreshCodes(); refreshHealth(); } }); }
+                        try { final Health.EngineReport nr = repo.report(); ui.post(new Runnable(){ public void run(){ report = nr; if (codesCleared != null) { codesCleared.setText("CÃ³digos borrados."); codesCleared.setVisibility(View.VISIBLE); } refreshCodes(); refreshHealth(); } }); }
                         catch (Throwable e) { ui.post(new Runnable(){ public void run(){ if (codesCleared != null) { codesCleared.setText("No se pudo borrar."); codesCleared.setVisibility(View.VISIBLE); } } }); }
                     }}).start();
                 }
@@ -967,7 +999,7 @@ public class DiagnosticoView {
 
     private void buildSensorsCard(LinearLayout col) {
         LinearLayout card = card(col, "Sensores en vivo");
-        TextView help = txt(SENSOR_16.length + " PIDs en vivo con su tendencia. Solo se leen mientras ves esta pestaña.", 12, MUTED(), false);
+        TextView help = txt(SENSOR_16.length + " PIDs en vivo con su tendencia. Solo se leen mientras ves esta pestaÃ±a.", 12, MUTED(), false);
         help.setPadding(0, (int)(4*s), 0, (int)(8*s));
         card.addView(help, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout grid = new LinearLayout(host);
@@ -1068,18 +1100,18 @@ public class DiagnosticoView {
         if (Pids.SPEED.equals(signal)) return "Velocidad";
         if (Pids.RPM.equals(signal)) return "Revoluciones";
         if (Pids.LOAD.equals(signal)) return "Carga";
-        if (Pids.MAP.equals(signal)) return "Presión MAP";
+        if (Pids.MAP.equals(signal)) return "PresiÃ³n MAP";
         if (Pids.MAF.equals(signal)) return "Flujo MAF";
         if (Pids.COOLANT.equals(signal)) return "Temp. motor";
-        if (Pids.INTAKE.equals(signal)) return "Temp. admisión";
+        if (Pids.INTAKE.equals(signal)) return "Temp. admisiÃ³n";
         if (Pids.FUEL.equals(signal)) return "Gasolina";
         if (Pids.VOLTAGE.equals(signal)) return "Voltaje";
-        if (Pids.BARO.equals(signal)) return "Presión barométrica";
+        if (Pids.BARO.equals(signal)) return "PresiÃ³n baromÃ©trica";
         if (Pids.CONSUMPTION.equals(signal)) return "Consumo";
         if (Pids.BOOST.equals(signal)) return "Turbo";
         if (Pids.FUEL_TRIM_SHORT.equals(signal)) return "Trim corto";
         if (Pids.FUEL_TRIM_LONG.equals(signal)) return "Trim largo";
-        if (Pids.FUEL_PRESSURE.equals(signal)) return "Presión comb.";
+        if (Pids.FUEL_PRESSURE.equals(signal)) return "PresiÃ³n comb.";
         if (Pids.TIMING.equals(signal)) return "Avance encendido";
         if (Pids.THROTTLE.equals(signal)) return "Acelerador";
         if (Pids.RUN_TIME.equals(signal)) return "Tiempo motor";
@@ -1100,7 +1132,7 @@ public class DiagnosticoView {
         if (Pids.MAP.equals(signal) || Pids.BARO.equals(signal) || Pids.FUEL_PRESSURE.equals(signal)) return String.format("%.0f kPa", v);
         if (Pids.MAF.equals(signal)) return String.format("%.1f g/s", v);
         if (Pids.FUEL_TRIM_SHORT.equals(signal) || Pids.FUEL_TRIM_LONG.equals(signal)) return String.format("%+.1f %%", v);
-        if (Pids.TIMING.equals(signal)) return String.format("%.1f°", v);
+        if (Pids.TIMING.equals(signal)) return String.format("%.1fÂ°", v);
         if (Pids.RUN_TIME.equals(signal)) { int m = (int)(v / 60); return String.format("%d:%02d", m / 60, m % 60); }
         if (Pids.DISTANCE_MIL.equals(signal)) return String.format("%.0f km", v);
         if (Pids.VOLTAGE.equals(signal)) return String.format("%.1f V", v);
@@ -1108,7 +1140,7 @@ public class DiagnosticoView {
         if (Pids.BOOST.equals(signal)) return String.format("%.1f psi", v * 0.145f);
         if (Pids.FUEL_RATE.equals(signal)) return String.format("%.1f L/h", v);
         if (Pids.O2S11.equals(signal) || Pids.O2S12.equals(signal)) return String.format("%.2f V", v);
-        return String.format("%.0f°C", v);
+        return String.format("%.0fÂ°C", v);
     }
 
     private static float minSpanFor(String signal) {
@@ -1130,8 +1162,8 @@ public class DiagnosticoView {
 
     // ---------- GRAFICAS (WorkshopAdvanced.kt LiveCharts) ----------
     private void buildChartsCard(LinearLayout col) {
-        LinearLayout card = card(col, "Gráficas");
-        TextView help = txt("Trazado continuo de las últimas lecturas. Toca la gráfica para ver un valor.", 12, MUTED(), false);
+        LinearLayout card = card(col, "GrÃ¡ficas");
+        TextView help = txt("Trazado continuo de las Ãºltimas lecturas. Toca la grÃ¡fica para ver un valor.", 12, MUTED(), false);
         help.setPadding(0, (int)(4*s), 0, (int)(6*s));
         card.addView(help, new LinearLayout.LayoutParams(-1, -2));
         if (chosen.isEmpty()) {
@@ -1226,19 +1258,19 @@ public class DiagnosticoView {
                 float mn = 0f, mx = 0f; boolean any = false;
                 for (Float f : pts) { if (f == null) continue; if (!any) { mn = f; mx = f; any = true; } else { if (f < mn) mn = f; if (f > mx) mx = f; } }
                 if (!any) { TextView nd = txt("--", 13, MUTED(), true); nd.setPadding((int)(8*s), 0, 0, 0); row.addView(nd, new LinearLayout.LayoutParams(-2, -2)); chartLegend.addView(row, new LinearLayout.LayoutParams(-1, -2)); continue; }
-                TextView range = txt(sensorText(sig, mn) + " … " + sensorText(sig, mx), 11, MUTED(), false);
+                TextView range = txt(sensorText(sig, mn) + " â€¦ " + sensorText(sig, mx), 11, MUTED(), false);
                 range.setMaxLines(1);
                 range.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 row.addView(range, new LinearLayout.LayoutParams(-2, -2));
                 Float shown = null;
                 if (touchFrac != null) shown = pointAt(pts, touchFrac);
                 else shown = pts.get(pts.size()-1);
-                TextView cur = txt(shown != null ? sensorText(sig, shown) : "—", 13, chartColor(i), true);
+                TextView cur = txt(shown != null ? sensorText(sig, shown) : "â€”", 13, chartColor(i), true);
                 cur.setMaxLines(1);
                 cur.setPadding((int)(8*s), 0, 0, 0);
                 row.addView(cur, new LinearLayout.LayoutParams(-2, -2));
             } else {
-                TextView cur = txt("—", 13, MUTED(), true);
+                TextView cur = txt("â€”", 13, MUTED(), true);
                 cur.setPadding((int)(8*s), 0, 0, 0);
                 row.addView(cur, new LinearLayout.LayoutParams(-2, -2));
             }
@@ -1274,14 +1306,14 @@ public class DiagnosticoView {
         demoRow.setOrientation(LinearLayout.HORIZONTAL);
         demoRow.setGravity(Gravity.CENTER);
         demoRow.setPadding(0, (int)(10*s), 0, 0);
-        TextView demoBtn = txt(repo.isDemo() ? "⏹ Detener simulación" : "🎛 Simular sensores (demo)", 13, TEXT(), true);
+        TextView demoBtn = txt(repo.isDemo() ? "â¹ Detener simulaciÃ³n" : "ðŸŽ› Simular sensores (demo)", 13, TEXT(), true);
         demoBtn.setGravity(Gravity.CENTER);
         demoBtn.setBackground(rounded(repo.isDemo() ? ACCENT() : INNER(), 14, 0));
         demoBtn.setTextColor(repo.isDemo() ? Color.WHITE : TEXT());
         demoBtn.setPadding((int)(16*s),(int)(8*s),(int)(16*s),(int)(8*s));
         demoBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
             try { repo.setDemo(!repo.isDemo()); } catch (Throwable ignored) {}
-            host.toast(repo.isDemo() ? "Simulación activa" : "Simulación detenida");
+            host.toast(repo.isDemo() ? "SimulaciÃ³n activa" : "SimulaciÃ³n detenida");
             render();
         } });
         demoRow.addView(demoBtn, new LinearLayout.LayoutParams(-2, -2));
@@ -1295,8 +1327,8 @@ public class DiagnosticoView {
         String status;
         int color;
         if (st == ObdRepository.State.OFF) { status = "Sin adaptador"; color = MUTED(); }
-        else if (st == ObdRepository.State.CONNECTING) { status = "Conectando a " + repo.targetOrDefault() + "…"; color = TEXT(); }
-        else if (st == ObdRepository.State.ON) { status = "Conectado a " + repo.targetOrDefault() + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " · " + repo.getAdapter() : ""); color = GOOD; }
+        else if (st == ObdRepository.State.CONNECTING) { status = "Conectando a " + repo.targetOrDefault() + "â€¦"; color = TEXT(); }
+        else if (st == ObdRepository.State.ON) { status = "Conectado a " + repo.targetOrDefault() + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " Â· " + repo.getAdapter() : ""); color = GOOD; }
         else { status = "Error: " + (repo.getError() != null ? repo.getError() : "sin respuesta"); color = DANGER; }
         adapterStatus.setText(status);
         adapterStatus.setTextColor(color);
@@ -1344,7 +1376,7 @@ public class DiagnosticoView {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView d = txt("Avisa en el inicio si el motor se calienta de más o la batería no carga.", 12, SOFT(), false);
+        TextView d = txt("Avisa en el inicio si el motor se calienta de mÃ¡s o la baterÃ­a no carga.", 12, SOFT(), false);
         d.setSingleLine(false);
         row.addView(d, new LinearLayout.LayoutParams(0, -2, 1f));
         Switch sw = new Switch(host);
@@ -1362,7 +1394,7 @@ public class DiagnosticoView {
 
     private void buildAccelCard(LinearLayout col) {
         LinearLayout card = card(col, "De 0 a 100 km/h");
-        TextView help = txt("Cronómetro con la velocidad del OBD (PID 010D). Detén el auto, luego acelera.", 12, MUTED(), false);
+        TextView help = txt("CronÃ³metro con la velocidad del OBD (PID 010D). DetÃ©n el auto, luego acelera.", 12, MUTED(), false);
         help.setPadding(0, (int)(4*s), 0, (int)(6*s));
         card.addView(help, new LinearLayout.LayoutParams(-1, -2));
         accelTime = txt("0.00 s", 38, TEXT(), true);
@@ -1393,14 +1425,14 @@ public class DiagnosticoView {
         Float speed = v.get(Pids.SPEED);
         float shown = 0f;
         String stateTxt;
-        if (t.state == TripLog.AccelTimer.RUNNING) { shown = (System.currentTimeMillis() - t.startMs) / 1000f; stateTxt = "Midiendo…"; }
+        if (t.state == TripLog.AccelTimer.RUNNING) { shown = (System.currentTimeMillis() - t.startMs) / 1000f; stateTxt = "Midiendoâ€¦"; }
         else if (t.state == TripLog.AccelTimer.DONE) { shown = t.seconds; stateTxt = "Listo"; }
         else if (t.state == TripLog.AccelTimer.READY) { stateTxt = "Listo para arrancar (0 km/h)"; }
-        else { stateTxt = "Detén el auto para armar"; }
+        else { stateTxt = "DetÃ©n el auto para armar"; }
         accelTime.setText(String.format("%.2f s", shown));
         accelTime.setTextColor(t.state == TripLog.AccelTimer.DONE ? ACCENT() : TEXT());
         accelState.setText(stateTxt);
-        accelSpeed.setText((speed != null ? String.format("%.0f km/h", speed) : "—") + " · OBD");
+        accelSpeed.setText((speed != null ? String.format("%.0f km/h", speed) : "â€”") + " Â· OBD");
         float best = 0f;
         try { best = host.getPrefs().getFloat("obd_best_accel", 0f); } catch (Throwable ignored) {}
         if (t.state == TripLog.AccelTimer.DONE && (best <= 0f || t.seconds < best)) {
@@ -1451,17 +1483,17 @@ public class DiagnosticoView {
         int n = Math.min(trips.size(), 10);
         for (int i = 0; i < n; i++) {
             TripLog.TripSummary t = trips.get(i);
-            TextView line = txt(dates.format(new Date(t.start)) + "  ·  " + String.format("%.1f km · %d:%02d h", t.km, t.seconds/60/60, (t.seconds/60)%60), 12, TEXT(), false);
+            TextView line = txt(dates.format(new Date(t.start)) + "  Â·  " + String.format("%.1f km Â· %d:%02d h", t.km, t.seconds/60/60, (t.seconds/60)%60), 12, TEXT(), false);
             line.setMaxLines(1);
             line.setEllipsize(android.text.TextUtils.TruncateAt.END);
             tripsCol.addView(line, new LinearLayout.LayoutParams(-1, -2));
             List<String> extras = new ArrayList<String>();
             extras.add("prom " + String.format("%.0f km/h", t.avgKmh));
-            extras.add("máx " + String.format("%.0f km/h", t.maxKmh));
+            extras.add("mÃ¡x " + String.format("%.0f km/h", t.maxKmh));
             if (t.maxRpm > 0f) extras.add(String.format("%.0f rpm", t.maxRpm));
-            if (t.maxCoolant != null) extras.add(String.format("%.0f°C", t.maxCoolant));
+            if (t.maxCoolant != null) extras.add(String.format("%.0fÂ°C", t.maxCoolant));
             if (t.kmPerLiter() != null) extras.add(String.format("%.1f km/L", t.kmPerLiter()));
-            TextView sub = txt(join(extras, " · "), 11, MUTED(), false);
+            TextView sub = txt(join(extras, " Â· "), 11, MUTED(), false);
             sub.setMaxLines(1);
             sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
             sub.setPadding(0, 0, 0, (int)(6*s));
