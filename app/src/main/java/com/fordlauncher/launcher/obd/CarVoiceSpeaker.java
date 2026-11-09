@@ -19,11 +19,13 @@ public class CarVoiceSpeaker {
     private final AudioManager am;
     private final String prefEngine;
     private final String prefVoice;
-    private TextToSpeech tts;
+    private volatile TextToSpeech tts;
     private boolean ready;
     private boolean speaking;
     private Listener listener;
     private String pending;
+    private int pendingChunks;
+    private int doneChunks;
 
     private final AudioManager.OnAudioFocusChangeListener focusListener = new AudioManager.OnAudioFocusChangeListener() {
         public void onAudioFocusChange(int change) {}
@@ -74,7 +76,12 @@ public class CarVoiceSpeaker {
                         try { tts.setSpeechRate(0.95f); } catch (Throwable ignored) {}
                         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                             public void onStart(String id) { setSpeaking(true); }
-                            public void onDone(String id) { setSpeaking(false); abandon(); }
+                            public void onDone(String id) {
+                                if (id != null && id.startsWith("chunk_")) {
+                                    doneChunks++;
+                                    if (doneChunks >= pendingChunks) { setSpeaking(false); abandon(); }
+                                } else { setSpeaking(false); abandon(); }
+                            }
                             public void onError(String id) { setSpeaking(false); abandon(); }
                         });
                         ready = true;
@@ -96,17 +103,38 @@ public class CarVoiceSpeaker {
         doSpeak(clean);
     }
 
+    /** Texto largo se fragmenta en oraciones de ≤120 caracteres con QUEUE_ADD. */
     private void doSpeak(String clean) {
+        if (clean == null || clean.length() == 0) return;
+        String s = clean.replaceAll("[*#_~`]", "").replaceAll("\\s+", " ").trim();
+        if (s.length() == 0) return;
+        java.util.ArrayList<String> chunks = new java.util.ArrayList<String>();
+        String[] parts = s.split("(?<=[.!?])\\s+");
+        StringBuilder cur = new StringBuilder();
+        for (String p : parts) {
+            String t = p.trim();
+            if (t.length() == 0) continue;
+            if (cur.length() > 0 && cur.length() + 1 + t.length() > 120) { chunks.add(cur.toString()); cur.setLength(0); }
+            if (cur.length() > 0) cur.append(' ');
+            cur.append(t);
+        }
+        if (cur.length() > 0) chunks.add(cur.toString());
         try { am.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK); } catch (Throwable ignored) {}
         setSpeaking(true);
-        try {
-            java.util.HashMap<String, String> m = new java.util.HashMap<String, String>();
-            m.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "ford-ai");
-            int res = tts.speak(clean, TextToSpeech.QUEUE_FLUSH, m);
-            Log.w(TAG, "TTS speak -> " + res + " (SUCCESS=0 ERROR=-1)");
-        } catch (Throwable e) {
-            setSpeaking(false);
-            abandon();
+        pendingChunks = chunks.size();
+        doneChunks = 0;
+        for (int i = 0; i < chunks.size(); i++) {
+            int mode = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+            try {
+                android.os.Bundle params = new android.os.Bundle();
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "chunk_" + i);
+                int res = tts.speak(chunks.get(i), mode, params, "chunk_" + i);
+                Log.w(TAG, "TTS speak chunk " + i + "/" + chunks.size() + " -> " + res);
+            } catch (Throwable e) {
+                setSpeaking(false);
+                abandon();
+                break;
+            }
         }
     }
 

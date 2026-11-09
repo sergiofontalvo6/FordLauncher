@@ -44,6 +44,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Módulo Teléfono (reemplaza al botón Cámara del dock): dos columnas asimétricas.
@@ -57,6 +59,11 @@ public class TelefonoView {
     private final Main host;
     private final float s;
     private final Handler ui = new Handler();
+    private final ExecutorService bg = Executors.newSingleThreadExecutor();
+    private volatile boolean contactsLoading;
+    private volatile boolean contactsReady;
+    private volatile boolean callsLoading;
+    private volatile boolean callsReady;
 
     private static final String[] TAB_NAMES = {"Recientes", "Contactos", "Teclado"};
     private int tab = 0;
@@ -252,6 +259,34 @@ public class TelefonoView {
         }
     }
 
+    /** Carga contactos en segundo plano (nunca en el hilo de UI). */
+    private void loadContactsAsync() {
+        if (contactsLoading || contactsReady) return;
+        contactsLoading = true;
+        bg.execute(new Runnable() {
+            public void run() {
+                loadContacts();
+                contactsReady = true;
+                contactsLoading = false;
+                ui.post(new Runnable() { public void run() { if (favList != null && favList.isAttachedToWindow()) render(); } });
+            }
+        });
+    }
+
+    /** Carga el historial de llamadas en segundo plano. */
+    private void loadRecentsAsync() {
+        if (callsLoading || callsReady) return;
+        callsLoading = true;
+        bg.execute(new Runnable() {
+            public void run() {
+                loadRecents();
+                callsReady = true;
+                callsLoading = false;
+                ui.post(new Runnable() { public void run() { if (content != null && content.isAttachedToWindow()) render(); } });
+            }
+        });
+    }
+
     private void permCard() {
         LinearLayout c = card(content, "Permisos");
         TextView t = txt("Para ver contactos e historial necesito permisos (teléfono y contactos). Puedo usarlos solo siempre que abras Teléfono.", 13, MUTED(), false);
@@ -282,7 +317,13 @@ public class TelefonoView {
             favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
         }
-        loadContacts();
+        if (!contactsReady) {
+            TextView t = txt("Cargando contactos…", 12, MUTED(), false);
+            t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
+            favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            loadContactsAsync();
+            return;
+        }
         List<Contact> favs = new ArrayList<Contact>();
         for (Contact ct : contacts) if (ct.starred) favs.add(ct);
         if (favs.isEmpty()) {
@@ -336,6 +377,7 @@ public class TelefonoView {
         try { host.sendBroadcast(new Intent("com.autochips.bluetooth.action.DIAL").putExtra("phone_number", n)); } catch (Throwable ignored) {}
         try { host.sendBroadcast(new Intent("com.goodocom.gocsdk.DIAL").putExtra("dial_number", n)); } catch (Throwable ignored) {}
         try { host.sendBroadcast(new Intent("com.ts.bt.dial").putExtra("dial_num", n)); } catch (Throwable ignored) {}
+        try { host.sendBroadcast(new Intent("com.android.ecar.bthf.DIAL").putExtra("dial_number", n)); } catch (Throwable ignored) {}
         // 2. Overlay propio de llamada en curso dentro de FiestaLauncher.
         showCallOverlay(n);
     }
@@ -510,7 +552,14 @@ public class TelefonoView {
 
     // ---------- RECIENTES ----------
     private void recentsTab() {
-        loadRecents();
+        if (!callsReady) {
+            loadRecentsAsync();
+            LinearLayout c = card(content, "Historial de llamadas");
+            TextView t = txt("Cargando historial…", 13, MUTED(), false);
+            t.setPadding(0, (int) (6 * s), 0, 0);
+            c.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
         LinearLayout c = card(content, "Historial de llamadas");
 
         // Switch superior estilo iOS: Números desconocidos
@@ -605,7 +654,14 @@ public class TelefonoView {
 
     // ---------- CONTACTOS ----------
     private void contactsTab() {
-        loadContacts();
+        if (!contactsReady) {
+            loadContactsAsync();
+            LinearLayout c = card(content, "Contactos del equipo");
+            TextView t = txt("Cargando contactos…", 13, MUTED(), false);
+            t.setPadding(0, (int) (6 * s), 0, 0);
+            c.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
         LinearLayout c = card(content, "Contactos del equipo");
 
         // Buscador con limpiar (X)
@@ -673,7 +729,14 @@ public class TelefonoView {
             c.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
         }
-        for (final Contact ct : shown) c.addView(contactRow(ct), new LinearLayout.LayoutParams(-1, -2));
+        int limit = q.length() == 0 ? Math.min(shown.size(), 40) : shown.size();
+        for (int i = 0; i < limit; i++) c.addView(contactRow(shown.get(i)), new LinearLayout.LayoutParams(-1, -2));
+        if (limit < shown.size()) {
+            TextView more = txt("Mostrando " + limit + " de " + shown.size() + " — escribe para buscar en el resto.", 11, MUTED(), false);
+            more.setTag("contactRow");
+            more.setPadding(0, (int) (6 * s), 0, 0);
+            c.addView(more, new LinearLayout.LayoutParams(-1, -2));
+        }
     }
 
     private LinearLayout contactRow(final Contact ct) {
