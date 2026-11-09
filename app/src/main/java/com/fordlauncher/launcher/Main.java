@@ -544,6 +544,13 @@ public class Main extends Activity {
             try { if (phone != null && phoneView != null) phone.refresh(); } catch (Throwable ignored) {}
             return;
         }
+        if (req == 100) {
+            boolean ok = false;
+            if (res != null) for (int r : res) if (r == android.content.pm.PackageManager.PERMISSION_GRANTED) ok = true;
+            if (res == null || res.length == 0) ok = false;
+            try { if (workshop != null && workshopView != null) workshop.onMicPerm(ok); } catch (Throwable ignored) {}
+            return;
+        }
         if (req != 77) return;
         stopGps();
         startGps();

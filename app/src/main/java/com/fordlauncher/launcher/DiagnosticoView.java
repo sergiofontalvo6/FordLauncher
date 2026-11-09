@@ -116,6 +116,10 @@ public class DiagnosticoView {
     private TextView aiStatus;
     private TextView aiAnalyzeBtn;
     private TextView aiSpeakBtn;
+    private TextView aiMicBtn;
+    private TextView aiTextToggle;
+    private com.fordlauncher.launcher.obd.VoiceInputManager voiceInput;
+    private volatile boolean micPending;
     private String lastAiText;
     private final java.util.Map<String, String> aiLastByMode = new java.util.LinkedHashMap<String, String>();
     private boolean aiBusy;
@@ -596,6 +600,7 @@ public class DiagnosticoView {
         h.setEllipsize(android.text.TextUtils.TruncateAt.END);
         head.addView(h, new LinearLayout.LayoutParams(0, -2, 1f));
         aiAnalyzeBtn = buttonSmall(head, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(task); } });
+        aiMicBtn = buttonSmall(head, "🎙", false, new Runnable(){ public void run(){ startVoiceInput(aiMicBtn); } });
         aiSpeakBtn = buttonSmall(head, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
         card.addView(head, new LinearLayout.LayoutParams(-1, -2));
         aiStatus = txt("", 12, MUTED(), false);
@@ -607,6 +612,16 @@ public class DiagnosticoView {
         if (prev != null) aiResult.setText(prev);
         aiResult.setPadding(0, (int)(8*s), 0, 0);
         card.addView(aiResult, new LinearLayout.LayoutParams(-1, -2));
+        aiTextToggle = txt("👁 Mostrar texto", 11, MUTED(), true);
+        aiTextToggle.setGravity(Gravity.RIGHT);
+        aiTextToggle.setVisibility(View.GONE);
+        aiTextToggle.setPadding(0, (int)(4*s), 0, 0);
+        aiTextToggle.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            boolean show = aiResult.getVisibility() != View.VISIBLE;
+            aiResult.setVisibility(show ? View.VISIBLE : View.GONE);
+            aiTextToggle.setText(show ? "👁 Ocultar texto" : "👁 Mostrar texto");
+        } });
+        card.addView(aiTextToggle, new LinearLayout.LayoutParams(-1, -2));
         updateAiSpeakLabel();
     }
 
@@ -705,6 +720,89 @@ public class DiagnosticoView {
         }
         if (lastAiText == null || lastAiText.length() == 0) return;
         runsAiSpeak(lastAiText);
+    }
+
+    // ---------- Entrada por micrófono (voz → IA con memoria, texto oculto) ----------
+    private static final int MIC_PERMISSION_REQ = 100;
+
+    public void onMicPerm(boolean granted) {
+        if (!micPending) return;
+        micPending = false;
+        if (granted) startVoiceInput(aiMicBtn);
+        else host.toast("Necesito el permiso de micrófono para dictar preguntas");
+    }
+
+    private void startVoiceInput(final TextView btn) {
+        if (aiBusy) return;
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            if (host.checkSelfPermission("android.permission.RECORD_AUDIO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                micPending = true;
+                try { host.requestPermissions(new String[]{"android.permission.RECORD_AUDIO"}, MIC_PERMISSION_REQ); }
+                catch (Throwable ignored) {}
+                return;
+            }
+        }
+        if (voiceInput == null) voiceInput = new com.fordlauncher.launcher.obd.VoiceInputManager(host);
+        voiceInput.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
+            public void onQueryReady(String text) { micQuestion(text); }
+            public void onError(String msg) {
+                if (aiMicBtn != null) aiMicBtn.setBackground(rounded(INNER(), 8, 0));
+                if (aiResult != null && aiStatus != null) {
+                    final String m = msg;
+                    ui.post(new Runnable(){ public void run(){ aiStatus.setText(m); aiStatus.setVisibility(View.VISIBLE); aiResult.setText(m); } });
+                } else {
+                    host.toast(msg);
+                }
+            }
+        });
+        // Brillo verde + pulso mientras escucha
+        if (btn != null) {
+            btn.setBackground(rounded(0xFF2DBE6C, 8, 0));
+            try {
+                android.view.animation.AlphaAnimation anim = new android.view.animation.AlphaAnimation(0.35f, 1f);
+                anim.setDuration(700);
+                anim.setRepeatMode(android.view.animation.Animation.REVERSE);
+                anim.setRepeatCount(android.view.animation.Animation.INFINITE);
+                btn.startAnimation(anim);
+            } catch (Throwable ignored) {}
+            btn.postDelayed(new Runnable(){ public void run(){ try { if (aiMicBtn != null) { aiMicBtn.clearAnimation(); aiMicBtn.setBackground(rounded(INNER(), 8, 0)); } } catch (Throwable ignored) {} } }, 8000);
+        }
+    }
+
+    /** Pregunta dictada por voz: se analiza con el snapshot actual y texto oculto por defecto. */
+    private void micQuestion(final String pregunta) {
+        if (pregunta == null || pregunta.trim().length() == 0) return;
+        if (voiceInput != null) { /* libera el recognizer tras cada consulta */ }
+        final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
+        String snap = buildSnapshotJson();
+        setAiBusy(true);
+        if (aiStatus != null) { aiStatus.setText("Escuchando respuesta…"); aiStatus.setVisibility(View.VISIBLE); }
+        if (aiResult != null) { aiResult.setText("Consultando telemetría..."); aiResult.setVisibility(View.VISIBLE); }
+        if (aiTextToggle != null) aiTextToggle.setVisibility(View.GONE);
+        GeminiDiagnosticClient.analyze(host, snap, task, false, new GeminiDiagnosticClient.Callback(){
+            public void onDone(final String text, final String error) {
+                ui.post(new Runnable(){ public void run(){
+                    setAiBusy(false);
+                    if (error != null) {
+                        if (aiStatus != null) aiStatus.setText(error);
+                        if (aiResult != null) aiResult.setText(error);
+                        lastAiText = null;
+                        updateAiSpeakLabel();
+                        return;
+                    }
+                    lastAiText = text;
+                    if (aiResult != null && aiTextToggle != null) {
+                        aiResult.setText(text);
+                        aiResult.setVisibility(View.GONE); // oculto por defecto tras voz
+                        aiTextToggle.setText("👁 Mostrar texto");
+                        aiTextToggle.setVisibility(View.VISIBLE);
+                    }
+                    updateAiSpeakLabel();
+                    // Respuesta hablada siempre (la pregunta fue por voz).
+                    runsAiSpeak(text);
+                } });
+            }
+        });
     }
 
     private void setAiBusy(boolean busy) {

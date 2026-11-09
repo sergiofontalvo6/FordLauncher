@@ -21,6 +21,40 @@ public class GeminiDiagnosticClient {
     private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
 
+    // Memoria conversacional (multi-turno): contenidos user/model que se acumulan.
+    private static final java.util.List<String> HISTORY = new java.util.ArrayList<String>();
+    private static final int MAX_CONTENTS = 12;
+
+    public static void clearHistory() {
+        synchronized (HISTORY) { HISTORY.clear(); }
+    }
+
+    private static void pushTurn(String role, String text) {
+        synchronized (HISTORY) {
+            HISTORY.add("{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + escape(text) + "\"}]}");
+        }
+    }
+
+    private static String contentsJson(String systemText, String userText, boolean detailed) {
+        synchronized (HISTORY) {
+            if (HISTORY.isEmpty()) {
+                HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(systemText) + "\"}]}");
+                HISTORY.add("{\"role\":\"model\",\"parts\":[{\"text\":\"Entendido, soy tu copiloto.\"}]}");
+            }
+            HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(userText) + "\"}]}");
+            while (HISTORY.size() > MAX_CONTENTS) HISTORY.remove(2); // conserva el setup inicial
+            StringBuilder b = new StringBuilder();
+            b.append("{\"contents\":[");
+            for (int i = 0; i < HISTORY.size(); i++) {
+                if (i > 0) b.append(",");
+                b.append(HISTORY.get(i));
+            }
+            b.append("]");
+            b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 900 : 250) + "}}");
+            return b.toString();
+        }
+    }
+
     static String apiKey(Context c) {
         try {
             String k = c.getSharedPreferences("launcher", 0).getString("gemini_api_key", "");
@@ -79,21 +113,18 @@ public class GeminiDiagnosticClient {
                     // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
-                    String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta." + greet + " " + taskText + ": " + snap
-                            + ". " + detailNote;
-                    StringBuilder b = new StringBuilder();
-                    b.append("{\"contents\":[{\"parts\":[{\"text\":\"");
-                    b.append(escape(prompt));
-                    b.append("\"}]}]"); // cierra text, parte, parts y contenido
-                    b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 900 : 250) + "}}");
-                    final byte[] body = b.toString().getBytes("UTF-8");
+                    String systemPrompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta." + greet
+                            + " Responde de forma natural, concisa y directa para ser leída al conductor en voz alta. Sin asteriscos ni viñetas complejas.";
+                    String userText = taskText + ": " + snap + ". " + detailNote;
+                    String body = contentsJson(systemPrompt, userText, detailed);
+                    final byte[] bytes = body.getBytes("UTF-8");
                     final String reqUrl = url;
                     // Plazo total: 2 intentos de 20 s (fábrica propia + sistema) en
                     // Net.postJson. HttpURLConnection en API 27 puede ignorar el
                     // timeout si DNS/TCP/TLS se cuelga; el Future lo corta igual.
                     Future<String> fut = NET.submit(new Callable<String>() {
                         public String call() throws Exception {
-                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, body, 20000);
+                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, bytes, 20000);
                             return extractSse(new String(out, "UTF-8"));
                         }
                     });
@@ -119,6 +150,7 @@ public class GeminiDiagnosticClient {
                         return;
                     }
                     Log.i("FordLauncher/AI", "Gemini OK (" + text.length() + " chars)");
+                    pushTurn("model", text);
                     if (callback != null) callback.onDone(text, null);
                 } catch (Throwable e) {
                     if (callback != null) callback.onDone(null, ERR_CONN);
