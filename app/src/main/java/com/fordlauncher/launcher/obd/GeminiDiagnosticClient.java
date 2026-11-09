@@ -28,6 +28,20 @@ public class GeminiDiagnosticClient {
         } catch (Throwable t) { return ""; }
     }
 
+    static String userName(Context c) {
+        try {
+            String n = c.getSharedPreferences("launcher", 0).getString("user_name", "");
+            return n == null ? "" : n.trim();
+        } catch (Throwable t) { return ""; }
+    }
+
+    static String carName(Context c) {
+        try {
+            String n = c.getSharedPreferences("launcher", 0).getString("car_name", "");
+            return n == null ? "" : n.trim();
+        } catch (Throwable t) { return ""; }
+    }
+
     public static void analyze(final Context ctx, final String jsonSnapshot, final Callback callback) {
         analyze(ctx, jsonSnapshot, null, callback);
     }
@@ -40,6 +54,13 @@ public class GeminiDiagnosticClient {
     public static void analyze(final Context ctx, final String jsonSnapshot, final String task, final boolean detailed, final Callback callback) {
         final String key = apiKey(ctx);
         final String snap = jsonSnapshot == null ? "{}" : jsonSnapshot;
+        final String userName = userName(ctx);
+        final String carName = carName(ctx);
+        final String greet = (userName.length() > 0 || carName.length() > 0)
+                ? " El usuario se llama " + (userName.length() > 0 ? userName : "amigo")
+                + (carName.length() > 0 ? " y su vehículo es un " + carName : "")
+                + ". Salúdalo por su nombre al inicio, dirígete a él como " + (userName.length() > 0 ? userName : "amigo") + " (nunca como 'jefe') y nombra el vehículo cuando hable de él."
+                : " Dirígete al usuario como 'amigo' (nunca como 'jefe').";
         final String taskText = task != null && task.length() > 0
                 ? task
                 : "Analiza estos datos OBD2 y códigos de falla";
@@ -58,7 +79,7 @@ public class GeminiDiagnosticClient {
                     // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
-                    String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta. " + taskText + ": " + snap
+                    String prompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta." + greet + " " + taskText + ": " + snap
                             + ". " + detailNote;
                     StringBuilder b = new StringBuilder();
                     b.append("{\"contents\":[{\"parts\":[{\"text\":\"");

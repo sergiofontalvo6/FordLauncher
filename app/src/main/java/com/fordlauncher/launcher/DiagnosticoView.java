@@ -293,8 +293,8 @@ public class DiagnosticoView {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(rounded(CARD(), 16, 0));
         card.setPadding((int)(14*s),(int)(12*s),(int)(14*s),(int)(12*s));
-        TextView h = txt(titleSmall, 11, MUTED(), true);
-        h.setText(titleSmall.toUpperCase());
+        TextView h = txt(titleSmall != null ? titleSmall : "", 11, MUTED(), true);
+        h.setText(titleSmall != null ? titleSmall.toUpperCase() : "");
         h.setMaxLines(1);
         h.setEllipsize(android.text.TextUtils.TruncateAt.END);
         card.addView(h, new LinearLayout.LayoutParams(-1, -2));
@@ -586,7 +586,18 @@ public class DiagnosticoView {
     }
 
     private void buildAiCard(LinearLayout col, final String task) {
-        LinearLayout card = card(col, "Diagnóstico inteligente IA");
+        LinearLayout card = card(col, null);
+        // Cabecera: título a la izquierda, botones pequeños a la derecha (fijos, encima del texto).
+        LinearLayout head = new LinearLayout(host);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView h = txt("DIAGNÓSTICO INTELIGENTE IA", 11, MUTED(), true);
+        h.setMaxLines(1);
+        h.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        head.addView(h, new LinearLayout.LayoutParams(0, -2, 1f));
+        aiAnalyzeBtn = buttonSmall(head, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(task); } });
+        aiSpeakBtn = buttonSmall(head, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
+        card.addView(head, new LinearLayout.LayoutParams(-1, -2));
         aiStatus = txt("", 12, MUTED(), false);
         aiStatus.setVisibility(View.GONE);
         aiStatus.setPadding(0, (int)(4*s), 0, 0);
@@ -594,14 +605,22 @@ public class DiagnosticoView {
         aiResult = txt("Toca «Analizar con IA» para combinar DTCs y sensores con Gemini.", 13, TEXT(), false);
         String prev = aiLastByMode.get(task);
         if (prev != null) aiResult.setText(prev);
-        aiResult.setPadding(0, (int)(4*s), 0, (int)(8*s));
+        aiResult.setPadding(0, (int)(8*s), 0, 0);
         card.addView(aiResult, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout row = new LinearLayout(host);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        aiAnalyzeBtn = button(row, "Analizar con IA", true, new Runnable(){ public void run(){ runAiAnalyze(task); } });
-        aiSpeakBtn = button(row, "🔊 Escuchar", false, new Runnable(){ public void run(){ toggleAiSpeak(); } });
-        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
         updateAiSpeakLabel();
+    }
+
+    private TextView buttonSmall(LinearLayout parent, String label, boolean primary, Runnable onClick) {
+        TextView b = txt(label, 11, primary ? Color.WHITE : TEXT(), true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(rounded(primary ? ACCENT() : INNER(), 8, 0));
+        b.setPadding((int)(10*s),(int)(5*s),(int)(10*s),(int)(5*s));
+        if (!primary) b.setBackground(rounded(INNER(), 8, 0));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = (int)(6*s);
+        parent.addView(b, lp);
+        if (onClick != null) b.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ onClick.run(); } });
+        return b;
     }
 
     private boolean anySpeaking() {
