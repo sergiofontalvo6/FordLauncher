@@ -16,6 +16,7 @@ import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.net.Uri;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.provider.CallLog;
 import android.provider.ContactsContract;
 import android.text.Editable;
@@ -24,11 +25,13 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Chronometer;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.io.InputStream;
@@ -43,18 +46,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Módulo Teléfono (reemplaza al botón Cámara del dock): Favoritos, Recientes,
- * Contactos y Teclado. Estilo programático como DiagnosticoView, colores del tema de Main.
+ * Módulo Teléfono (reemplaza al botón Cámara del dock): dos columnas asimétricas.
+ * Columna izquierda fija (32%) con Favoritos; columna derecha (68%) con tres
+ * pestañas (Recientes | Contactos | Teclado) y botón de cierre. En la pestaña
+ * Recientes hay un switch estilo iOS para filtrar números desconocidos. Las
+ * llamadas se emiten con los broadcasts del SoC AC8227L (AutoChips/GooCo/TS) y
+ * un overlay propio de llamada en curso evita que la app del sistema se superponga.
  */
 public class TelefonoView {
     private final Main host;
     private final float s;
     private final Handler ui = new Handler();
 
-    private static final String[] TAB_NAMES = {"Favoritos", "Recientes", "Contactos", "Teclado"};
-    private static final String[] REC_FILTERS = {"Todas", "Llamadas", "Números desconocidos", "Perdidas"};
-    private int tab = 1;
-    private int recFilter;
+    private static final String[] TAB_NAMES = {"Recientes", "Contactos", "Teclado"};
+    private int tab = 0;
+    private boolean unknownOnly;
 
     private static final class Contact {
         String key, name, number;
@@ -73,6 +79,10 @@ public class TelefonoView {
     private final List<CallRec> calls = new ArrayList<CallRec>();
     private final Map<String, String> nameCache = new HashMap<String, String>();
     private LinearLayout content;
+    private LinearLayout favList;
+    private LinearLayout tabBar;
+    private FrameLayout callOverlay;
+    private Chronometer callTimer;
     private EditText searchEt;
     private TextView dialNumber;
     private String dialText = "";
@@ -125,49 +135,95 @@ public class TelefonoView {
 
     public TelefonoView(Main h, float scale) { host = h; s = scale; }
 
-    public LinearLayout build() {
+    public FrameLayout build() {
+        FrameLayout wrap = new FrameLayout(host);
+
         LinearLayout root = new LinearLayout(host);
-        root.setOrientation(LinearLayout.VERTICAL);
+        root.setOrientation(LinearLayout.HORIZONTAL);
         root.setBackgroundColor(BG());
         root.setPadding((int) (10 * s), (int) (10 * s), (int) (10 * s), (int) (10 * s));
+        wrap.addView(root, new FrameLayout.LayoutParams(-1, -1));
 
-        // Barra superior de navegación (chips)
-        LinearLayout tabBar = new LinearLayout(host);
+        // ---------- COLUMNA IZQUIERDA: Favoritos ----------
+        LinearLayout left = new LinearLayout(host);
+        left.setOrientation(LinearLayout.VERTICAL);
+        left.setPadding(0, 0, (int) (10 * s), 0);
+        TextView leftTitle = txt("★ Favoritos", 15, TEXT(), true);
+        leftTitle.setPadding((int) (6 * s), (int) (4 * s), 0, (int) (10 * s));
+        left.addView(leftTitle, new LinearLayout.LayoutParams(-1, -2));
+        ScrollView favSc = new ScrollView(host);
+        favSc.setVerticalScrollBarEnabled(false);
+        favList = new LinearLayout(host);
+        favList.setOrientation(LinearLayout.VERTICAL);
+        favSc.addView(favList, new FrameLayout.LayoutParams(-1, -2));
+        left.addView(favSc, new LinearLayout.LayoutParams(-1, 0, 1f));
+        root.addView(left, new LinearLayout.LayoutParams(0, -1, 0.32f));
+
+        // ---------- DIVISORIA ----------
+        View div = new View(host);
+        div.setBackgroundColor(0x22FFFFFF);
+        root.addView(div, new LinearLayout.LayoutParams(Math.max(1, (int) s), -1));
+
+        // ---------- COLUMNA DERECHA ----------
+        LinearLayout right = new LinearLayout(host);
+        right.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, -1, 0.68f);
+        rp.leftMargin = (int) (10 * s);
+        root.addView(right, rp);
+
+        // Cabecera compacta (máx 38dp): 3 pestañas + cierre
+        LinearLayout header = new LinearLayout(host);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding((int) (6 * s), 0, (int) (6 * s), (int) (6 * s));
+        tabBar = new LinearLayout(host);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
-        tabBar.setPadding(0, 0, 0, (int) (8 * s));
+        tabBar.setGravity(Gravity.CENTER_VERTICAL);
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int idx = i;
-            TextView t = txt(TAB_NAMES[i], 13, TEXT(), true);
+            TextView t = txt(TAB_NAMES[i], 12, TEXT(), true);
             t.setGravity(Gravity.CENTER);
             t.setMaxLines(1);
             t.setEllipsize(TextUtils.TruncateAt.END);
-            t.setPadding((int) (6 * s), (int) (9 * s), (int) (6 * s), (int) (9 * s));
+            t.setPadding((int) (4 * s), (int) (6 * s), (int) (4 * s), (int) (6 * s));
             t.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) { selectTab(idx); }
             });
             tabBar.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
-            if (i > 0) { /* márgenes */ }
         }
-        root.addView(tabBar, new LinearLayout.LayoutParams(-1, -2));
+        header.addView(tabBar, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView close = txt("✕", 15, MUTED(), false);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding((int) (12 * s), (int) (6 * s), (int) (12 * s), (int) (6 * s));
+        close.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { host.closePhone(); }
+        });
+        header.addView(close, new LinearLayout.LayoutParams(-2, -2));
+        right.addView(header, new LinearLayout.LayoutParams(-1, (int) (38 * s)));
 
         ScrollView sc = new ScrollView(host);
         sc.setVerticalScrollBarEnabled(false);
         content = new LinearLayout(host);
         content.setOrientation(LinearLayout.VERTICAL);
         sc.addView(content, new FrameLayout.LayoutParams(-1, -2));
-        root.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1f));
+        right.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        callOverlay = buildCallOverlay();
+        callOverlay.setVisibility(View.GONE);
+        wrap.addView(callOverlay, new FrameLayout.LayoutParams(-1, -1));
 
         render();
-        return root;
+        return wrap;
     }
 
-    private void paintTabs(LinearLayout parent) {
-        for (int i = 0; i < parent.getChildCount(); i++) {
-            View v = parent.getChildAt(i);
+    private void paintTabs() {
+        if (tabBar == null) return;
+        for (int i = 0; i < tabBar.getChildCount(); i++) {
+            View v = tabBar.getChildAt(i);
             if (!(v instanceof TextView)) continue;
             TextView t = (TextView) v;
-            boolean sel = (TAB_NAMES[i].length() > 0) && tab == i;
-            t.setBackground(rounded(sel ? ACCENT() : INNER(), 10, 0));
+            boolean sel = tab == i;
+            t.setBackground(rounded(sel ? ACCENT() : INNER(), 9, 0));
             t.setTextColor(sel ? Color.WHITE : TEXT());
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) t.getLayoutParams();
             if (i > 0) lp.leftMargin = (int) (4 * s);
@@ -181,17 +237,16 @@ public class TelefonoView {
 
     private void render() {
         if (content == null) return;
-        LinearLayout parent = (LinearLayout) content.getParent().getParent();
-        if (parent != null && parent.getChildCount() > 0) paintTabs((LinearLayout) parent.getChildAt(0));
+        paintTabs();
+        renderFavorites();
         content.removeAllViews();
-        if (!host.phonePermsGranted() && tab != 3) {
+        if (!host.phonePermsGranted() && tab != 2) {
             permCard();
             return;
         }
         switch (tab) {
-            case 0: favTab(); break;
-            case 1: recentsTab(); break;
-            case 2: contactsTab(); break;
+            case 0: recentsTab(); break;
+            case 1: contactsTab(); break;
             default: keypadTab(); break;
         }
     }
@@ -216,29 +271,72 @@ public class TelefonoView {
         c.addView(row, new LinearLayout.LayoutParams(-1, -2));
     }
 
+    // ---------- FAVORITOS (columna izquierda) ----------
+    private void renderFavorites() {
+        if (favList == null) return;
+        favList.removeAllViews();
+        if (!host.phonePermsGranted()) {
+            TextView t = txt("Sin permiso de contactos.", 12, MUTED(), false);
+            t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
+            favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
+        loadContacts();
+        List<Contact> favs = new ArrayList<Contact>();
+        for (Contact ct : contacts) if (ct.starred) favs.add(ct);
+        if (favs.isEmpty()) {
+            TextView t = txt("Sin favoritos. En Contactos toca la estrella para marcar.", 12, MUTED(), false);
+            t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
+            favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
+        for (final Contact ct : favs) favList.addView(favRow(ct), new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private LinearLayout favRow(final Contact ct) {
+        LinearLayout row = new LinearLayout(host);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding((int) (4 * s), (int) (8 * s), (int) (4 * s), (int) (8 * s));
+        ImageView photo = avatar(ct, (int) (42 * s));
+        row.addView(photo, new LinearLayout.LayoutParams((int) (42 * s), (int) (42 * s)));
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding((int) (10 * s), 0, (int) (6 * s), 0);
+        TextView nm = txt(ct.name, 15, TEXT(), true);
+        nm.setMaxLines(1);
+        nm.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(nm, new LinearLayout.LayoutParams(-1, -2));
+        TextView nb = txt(ct.number, 12, MUTED(), false);
+        nb.setMaxLines(1);
+        nb.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(nb, new LinearLayout.LayoutParams(-1, -2));
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView cb = txt("📞", 14, Color.WHITE, false);
+        cb.setGravity(Gravity.CENTER);
+        cb.setBackground(rounded(0xFF2DBE6C, 18, 0));
+        cb.setPadding((int) (10 * s), (int) (8 * s), (int) (10 * s), (int) (8 * s));
+        cb.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { callNumber(ct.number); }
+        });
+        row.addView(cb, new LinearLayout.LayoutParams(-2, -2));
+        return row;
+    }
+
     // ---------- llamadas ----------
     private void toast(String m) { try { android.widget.Toast.makeText(host, m, android.widget.Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {} }
 
+    /** Emite la llamada por los broadcasts del SoC AC8227L y muestra el overlay propio. */
     void callNumber(String number) {
         if (number == null) return;
         String n = cleanNumber(number);
         if (n == null) { toast("Número vacío"); return; }
-        // Canales BT de la radio (AutoChips / GooCo).
+        // 1. Broadcasts para la radio china (evitan abrir la app de sistema).
         try { host.sendBroadcast(new Intent("com.autochips.bluetooth.action.DIAL").putExtra("phone_number", n)); } catch (Throwable ignored) {}
         try { host.sendBroadcast(new Intent("com.goodocom.gocsdk.DIAL").putExtra("dial_number", n)); } catch (Throwable ignored) {}
-        // Llamada directa con el marcado del sistema.
-        Intent call = new Intent(Intent.ACTION_CALL);
-        call.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        call.setData(Uri.parse("tel:" + Uri.encode(n)));
-        try {
-            host.startActivity(call);
-        } catch (SecurityException e) {
-            // Sin permiso de llamada: abrir el dialer y avisar.
-            toast("Sin permiso de llamada: abriendo discado");
-            try {
-                host.startActivity(new Intent(Intent.ACTION_DIAL).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK).setData(Uri.parse("tel:" + Uri.encode(n))));
-            } catch (Throwable t2) { toast("No se pudo llamar"); }
-        } catch (Throwable t) { toast("No se pudo llamar"); }
+        try { host.sendBroadcast(new Intent("com.ts.bt.dial").putExtra("dial_num", n)); } catch (Throwable ignored) {}
+        // 2. Overlay propio de llamada en curso dentro de FiestaLauncher.
+        showCallOverlay(n);
     }
 
     private static String cleanNumber(String n) {
@@ -251,48 +349,162 @@ public class TelefonoView {
         return o.length() > 0 ? o.toString() : null;
     }
 
-    // ---------- FAVORITOS ----------
-    private void favTab() {
-        loadContacts();
-        LinearLayout c = card(content, "Favoritos (toca para llamar)");
-        List<Contact> favs = new ArrayList<Contact>();
-        for (Contact ct : contacts) if (ct.starred) favs.add(ct);
-        if (favs.isEmpty()) {
-            TextView t = txt("Sin favoritos todavía. En Contactos toca la estrella para marcar.", 13, MUTED(), false);
-            t.setPadding(0, (int) (6 * s), 0, 0);
-            c.addView(t, new LinearLayout.LayoutParams(-1, -2));
-            return;
-        }
-        LinearLayout grid = new LinearLayout(host);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        int cols = 5;
-        for (int i = 0; i < favs.size(); i += cols) {
-            LinearLayout line = new LinearLayout(host);
-            line.setOrientation(LinearLayout.HORIZONTAL);
-            for (int j = 0; j < cols && i + j < favs.size(); j++) line.addView(favTile(favs.get(i + j)), new LinearLayout.LayoutParams(0, -2, 1f));
-            grid.addView(line, new LinearLayout.LayoutParams(-1, -2));
-        }
-        c.addView(grid, new LinearLayout.LayoutParams(-1, -2));
+    // ---------- OVERLAY DE LLAMADA EN CURSO ----------
+    private TextView ovName, ovNumber;
+    private ImageView ovAvatar;
+    private TextView ovMute, ovSpeaker;
+
+    private FrameLayout buildCallOverlay() {
+        FrameLayout ov = new FrameLayout(host);
+        ov.setBackgroundColor(0xAA000000);
+        LinearLayout card = new LinearLayout(host);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(CARD(), 18, 0));
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding((int) (24 * s), (int) (20 * s), (int) (24 * s), (int) (20 * s));
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams((int) (380 * s), -2);
+        clp.gravity = Gravity.CENTER;
+        ov.addView(card, clp);
+
+        ovAvatar = new ImageView(host);
+        card.addView(ovAvatar, new LinearLayout.LayoutParams((int) (72 * s), (int) (72 * s)));
+        ovName = txt("", 20, TEXT(), true);
+        ovName.setGravity(Gravity.CENTER);
+        ovName.setMaxLines(1);
+        ovName.setEllipsize(TextUtils.TruncateAt.END);
+        ovName.setPadding(0, (int) (10 * s), 0, 0);
+        card.addView(ovName, new LinearLayout.LayoutParams(-1, -2));
+        ovNumber = txt("", 15, MUTED(), false);
+        ovNumber.setGravity(Gravity.CENTER);
+        card.addView(ovNumber, new LinearLayout.LayoutParams(-1, -2));
+        callTimer = new Chronometer(host);
+        callTimer.setTextColor(TEXT());
+        callTimer.setTextSize(18);
+        callTimer.setGravity(Gravity.CENTER);
+        callTimer.setPadding(0, (int) (4 * s), 0, (int) (14 * s));
+        card.addView(callTimer, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout midRow = new LinearLayout(host);
+        midRow.setOrientation(LinearLayout.HORIZONTAL);
+        midRow.setGravity(Gravity.CENTER);
+        ovMute = txt("🔇 Mute", 13, TEXT(), true);
+        ovMute.setGravity(Gravity.CENTER);
+        ovMute.setBackground(rounded(INNER(), 14, 0));
+        ovMute.setPadding((int) (14 * s), (int) (8 * s), (int) (14 * s), (int) (8 * s));
+        ovMute.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                try {
+                    AudioManager am = (AudioManager) host.getSystemService(android.content.Context.AUDIO_SERVICE);
+                    boolean m = !am.isMicrophoneMute();
+                    am.setMicrophoneMute(m);
+                    ovMute.setText(m ? "🔈 Activar" : "🔇 Mute");
+                } catch (Throwable ignored) { toast("Mute no disponible"); }
+            }
+        });
+        midRow.addView(ovMute, new LinearLayout.LayoutParams(-2, -2));
+        TextView dtmf = txt("DTMF", 13, TEXT(), true);
+        dtmf.setGravity(Gravity.CENTER);
+        dtmf.setBackground(rounded(INNER(), 14, 0));
+        dtmf.setPadding((int) (14 * s), (int) (8 * s), (int) (14 * s), (int) (8 * s));
+        dtmf.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { dtmfDialog(); }
+        });
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
+        dlp.leftMargin = (int) (10 * s);
+        midRow.addView(dtmf, dlp);
+        ovSpeaker = txt("🔊 Altavoz", 13, TEXT(), true);
+        ovSpeaker.setGravity(Gravity.CENTER);
+        ovSpeaker.setBackground(rounded(INNER(), 14, 0));
+        ovSpeaker.setPadding((int) (14 * s), (int) (8 * s), (int) (14 * s), (int) (8 * s));
+        ovSpeaker.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                try {
+                    AudioManager am = (AudioManager) host.getSystemService(android.content.Context.AUDIO_SERVICE);
+                    boolean spk = !am.isSpeakerphoneOn();
+                    am.setSpeakerphoneOn(spk);
+                    ovSpeaker.setText(spk ? "📞 Auricular" : "🔊 Altavoz");
+                } catch (Throwable ignored) { toast("Altavoz no disponible"); }
+            }
+        });
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+        slp.leftMargin = (int) (10 * s);
+        midRow.addView(ovSpeaker, slp);
+        card.addView(midRow, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView hang = txt("📞 Colgar", 18, Color.WHITE, true);
+        hang.setGravity(Gravity.CENTER);
+        hang.setBackground(rounded(0xFFF44336, 26, 0));
+        hang.setPadding(0, (int) (14 * s), 0, (int) (14 * s));
+        hang.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { hangUp(); }
+        });
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+        hlp.topMargin = (int) (20 * s);
+        card.addView(hang, hlp);
+        return ov;
     }
 
-    private LinearLayout favTile(final Contact ct) {
-        LinearLayout t = new LinearLayout(host);
-        t.setOrientation(LinearLayout.VERTICAL);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding((int) (4 * s), (int) (10 * s), (int) (4 * s), (int) (10 * s));
-        ImageView photo = avatar(ct, (int) (54 * s));
-        photo.setOnClickListener(null);
-        t.addView(photo, new LinearLayout.LayoutParams((int) (54 * s), (int) (54 * s)));
-        TextView name = txt(ct.name, 12, TEXT(), true);
-        name.setGravity(Gravity.CENTER);
-        name.setMaxLines(1);
-        name.setEllipsize(TextUtils.TruncateAt.END);
-        name.setPadding(0, (int) (4 * s), 0, 0);
-        t.addView(name, new LinearLayout.LayoutParams(-1, -2));
-        t.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { callNumber(ct.number); }
-        });
-        return t;
+    private void showCallOverlay(String number) {
+        String name = lookupName(number);
+        ovName.setText(name != null ? name : number);
+        ovNumber.setText(name != null ? number : "Llamando…");
+        if (name != null) {
+            Contact ct = new Contact();
+            ct.key = number; ct.name = name; ct.number = number;
+            ovAvatar.setImageBitmap(null);
+            ovAvatar.setImageDrawable(placeholder(name, (int) (72 * s)));
+        } else {
+            ovAvatar.setImageDrawable(placeholder("", (int) (72 * s)));
+        }
+        callTimer.setBase(SystemClock.elapsedRealtime());
+        callTimer.start();
+        callOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void hangUp() {
+        try { host.sendBroadcast(new Intent("com.autochips.bluetooth.action.HANGUP")); } catch (Throwable ignored) {}
+        try { host.sendBroadcast(new Intent("com.goodocom.gocsdk.HANGUP")); } catch (Throwable ignored) {}
+        try { callTimer.stop(); } catch (Throwable ignored) {}
+        try {
+            AudioManager am = (AudioManager) host.getSystemService(android.content.Context.AUDIO_SERVICE);
+            am.setMicrophoneMute(false);
+            am.setSpeakerphoneOn(false);
+            ovMute.setText("🔇 Mute");
+            ovSpeaker.setText("🔊 Altavoz");
+        } catch (Throwable ignored) {}
+        callOverlay.setVisibility(View.GONE);
+    }
+
+    private void dtmfDialog() {
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (18 * s);
+        col.setPadding(pad, pad, pad, pad);
+        final String[] digits = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"};
+        for (int r = 0; r < 4; r++) {
+            LinearLayout line = new LinearLayout(host);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            for (int c = 0; c < 3; c++) {
+                final String d = digits[r * 3 + c];
+                TextView b = txt(d, 20, TEXT(), true);
+                b.setGravity(Gravity.CENTER);
+                b.setBackground(rounded(INNER(), 12, 0));
+                b.setPadding((int) (16 * s), (int) (12 * s), (int) (16 * s), (int) (12 * s));
+                b.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) { beepDigit(d); }
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+                lp.leftMargin = (int) (4 * s); lp.rightMargin = (int) (4 * s);
+                lp.topMargin = (int) (4 * s); lp.bottomMargin = (int) (4 * s);
+                line.addView(b, lp);
+            }
+            col.addView(line, new LinearLayout.LayoutParams(-1, -2));
+        }
+        new android.app.AlertDialog.Builder(host, Main.dlg())
+            .setTitle("DTMF")
+            .setView(col)
+            .setNegativeButton("Cerrar", null)
+            .show();
     }
 
     // ---------- RECIENTES ----------
@@ -300,39 +512,34 @@ public class TelefonoView {
         loadRecents();
         LinearLayout c = card(content, "Historial de llamadas");
 
-        // Filtro superior estilo chips (Todas / Llamadas / Desconocidos / Perdidas)
-        LinearLayout filt = new LinearLayout(host);
-        filt.setOrientation(LinearLayout.HORIZONTAL);
-        filt.setPadding(0, (int) (4 * s), 0, (int) (10 * s));
-        for (int i = 0; i < REC_FILTERS.length; i++) {
-            final int idx = i;
-            boolean sel = recFilter == i;
-            TextView chip = txt(REC_FILTERS[i], 12, sel ? Color.WHITE : TEXT(), true);
-            chip.setGravity(Gravity.CENTER);
-            chip.setMaxLines(1);
-            chip.setEllipsize(TextUtils.TruncateAt.END);
-            chip.setBackground(rounded(sel ? ACCENT() : INNER(), 14, 0));
-            chip.setPadding((int) (10 * s), (int) (6 * s), (int) (10 * s), (int) (6 * s));
-            chip.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) { recFilter = idx; render(); }
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-            lp.leftMargin = (int) (4 * s);
-            lp.rightMargin = (int) (4 * s);
-            filt.addView(chip, lp);
-        }
-        c.addView(filt, new LinearLayout.LayoutParams(-1, -2));
+        // Switch superior estilo iOS: Números desconocidos
+        LinearLayout swRow = new LinearLayout(host);
+        swRow.setOrientation(LinearLayout.HORIZONTAL);
+        swRow.setGravity(Gravity.CENTER_VERTICAL);
+        swRow.setPadding(0, (int) (4 * s), 0, (int) (10 * s));
+        View spacer = new View(host);
+        swRow.addView(spacer, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView swLabel = txt("Números desconocidos", 13, MUTED(), false);
+        swRow.addView(swLabel, new LinearLayout.LayoutParams(-2, -2));
+        Switch sw = new Switch(host);
+        sw.setPadding((int) (8 * s), 0, 0, 0);
+        sw.setChecked(unknownOnly);
+        sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                if (unknownOnly != on) { unknownOnly = on; render(); }
+            }
+        });
+        swRow.addView(sw, new LinearLayout.LayoutParams(-2, -2));
+        c.addView(swRow, new LinearLayout.LayoutParams(-1, -2));
 
         List<CallRec> shown = new ArrayList<CallRec>();
         for (CallRec r : calls) {
-            boolean a = true;
-            if (recFilter == 1) a = r.known || (r.duration > 0);           // Llamadas
-            else if (recFilter == 2) a = !r.known;                            // Números desconocidos
-            else if (recFilter == 3) a = r.type == CallLog.Calls.MISSED_TYPE || r.type == CallLog.Calls.REJECTED_TYPE; // Perdidas
+            // OFF: historial regular (conocidos + respondidas). ON: solo desconocidos.
+            boolean a = unknownOnly ? !r.known : (r.known || r.duration > 0);
             if (a) shown.add(r);
         }
         if (shown.isEmpty()) {
-            TextView t = txt("Sin llamadas en este grupo.", 13, MUTED(), false);
+            TextView t = txt(unknownOnly ? "Sin números desconocidos." : "Sin llamadas en este grupo.", 13, MUTED(), false);
             t.setPadding(0, (int) (4 * s), 0, 0);
             c.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
@@ -502,13 +709,22 @@ public class TelefonoView {
         return row;
     }
 
-    // ---------- TECLADO ----------
+    // ---------- TECLADO COMPACTO ----------
     private void keypadTab() {
-        LinearLayout c = card(content, "Teclado");
+        // Contenedor centrado de 340dp
+        LinearLayout center = new LinearLayout(host);
+        center.setOrientation(LinearLayout.HORIZONTAL);
+        center.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding((int) (10 * s), (int) (6 * s), (int) (10 * s), (int) (16 * s));
+        center.addView(col, new LinearLayout.LayoutParams((int) (340 * s), -2));
+        content.addView(center, new LinearLayout.LayoutParams(-1, -2));
+
         dialNumber = txt("", 26, TEXT(), true);
         dialNumber.setGravity(Gravity.CENTER);
-        dialNumber.setMinHeight((int) (34 * s));
-        c.addView(dialNumber, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams dnp = new LinearLayout.LayoutParams(-1, (int) (44 * s));
+        col.addView(dialNumber, dnp);
 
         TextView bs = txt("⌫ Borrar", 13, MUTED(), false);
         bs.setGravity(Gravity.CENTER);
@@ -519,17 +735,16 @@ public class TelefonoView {
         bs.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) { dialText = ""; dialNumber.setText(""); return true; }
         });
-        c.addView(bs, new LinearLayout.LayoutParams(-1, -2));
+        col.addView(bs, new LinearLayout.LayoutParams(-1, -2));
 
         final String[] digits = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0+", "#"};
         for (int r = 0; r < 4; r++) {
             LinearLayout line = new LinearLayout(host);
             line.setOrientation(LinearLayout.HORIZONTAL);
-            for (int col = 0; col < 3; col++) {
-                final String d = digits[r * 3 + col];
+            for (int colI = 0; colI < 3; colI++) {
+                final String d = digits[r * 3 + colI];
                 TextView b = txt(d, 22, TEXT(), true);
                 b.setGravity(Gravity.CENTER);
-                b.setPadding((int) (10 * s), (int) (10 * s), (int) (10 * s), (int) (10 * s));
                 b.setBackground(rounded(INNER(), 14, 0));
                 b.setSoundEffectsEnabled(true);
                 b.setOnTouchListener(new View.OnTouchListener() {
@@ -554,12 +769,12 @@ public class TelefonoView {
                         dialNumber.setText(dialText);
                     }
                 });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, (int) (44 * s), 1f);
                 lp.leftMargin = (int) (4 * s); lp.rightMargin = (int) (4 * s);
                 lp.topMargin = (int) (4 * s); lp.bottomMargin = (int) (4 * s);
                 line.addView(b, lp);
             }
-            c.addView(line, new LinearLayout.LayoutParams(-1, -2));
+            col.addView(line, new LinearLayout.LayoutParams(-1, -2));
         }
 
         TextView callBtn = txt("📞  Llamar", 18, Color.WHITE, true);
@@ -571,8 +786,9 @@ public class TelefonoView {
         });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
         clp.topMargin = (int) (10 * s);
-        c.addView(callBtn, clp);
+        col.addView(callBtn, clp);
     }
+
     private void beepDigit(String d) {
         try {
             if (tone == null) tone = new ToneGenerator(AudioManager.STREAM_DTMF, 30);

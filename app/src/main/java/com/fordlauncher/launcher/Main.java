@@ -1553,21 +1553,11 @@ public class Main extends Activity {
         phoneView.setClickable(true);
         phone = new TelefonoView(this, s);
         phoneView.addView(phone.build(), new FrameLayout.LayoutParams(-1, -1));
-        TextView close = tv("✕ Inicio", 12, Color.WHITE, true);
-        close.setGravity(Gravity.CENTER);
-        close.setBackground(round(RED, 12));
-        close.setPadding((int)(10*s),(int)(6*s),(int)(10*s),(int)(6*s));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2,-2);
-        lp.gravity = Gravity.TOP | Gravity.RIGHT;
-        lp.rightMargin = (int)(10*s);
-        lp.topMargin = (int)(8*s);
-        close.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ closePhone(); } });
-        phoneView.addView(close, lp);
         place(board, phoneView, 0, 56, 1024, 484);
         phoneView.bringToFront();
     }
 
-    private void closePhone() {
+    void closePhone() {
         try { if (phone != null) phone.destroy(); } catch (Throwable ignored) {}
         if (phoneView != null) { try { board.removeView(phoneView); } catch (Throwable ignored) {} phoneView = null; phone = null; }
     }
