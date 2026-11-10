@@ -685,8 +685,20 @@ public class DiagnosticoView {
         if (speaker != null) return speaker;
         speaker = new CarVoiceSpeaker(host);
         speaker.setListener(new CarVoiceSpeaker.Listener(){
-            public void onSpeaking(boolean speaking) { ui.post(new Runnable(){ public void run(){ updateAiSpeakLabel(); } }); }
+            public void onSpeaking(boolean speaking) { ui.post(new Runnable(){ public void run(){
+                updateAiSpeakLabel();
+                if (aiStatus != null) {
+                    if (speaking) {
+                        if ("Probando voz local...".equals(aiStatus.getText().toString())) aiStatus.setText("Reproduciendo voz...");
+                        aiStatus.setVisibility(View.VISIBLE);
+                    } else if ("Probando voz local...".equals(aiStatus.getText().toString()) || "Reproduciendo voz...".equals(aiStatus.getText().toString())) {
+                        aiStatus.setText("");
+                        aiStatus.setVisibility(View.GONE);
+                    }
+                }
+            } }); }
             public void onError(String msg) { ui.post(new Runnable(){ public void run(){
+                if (aiStatus != null) { aiStatus.setText(msg); aiStatus.setVisibility(View.VISIBLE); }
                 if (aiResult != null && lastAiText != null) aiResult.setText(msg + "\n\n" + lastAiText);
                 else if (aiResult != null) aiResult.setText(msg);
                 updateAiSpeakLabel();

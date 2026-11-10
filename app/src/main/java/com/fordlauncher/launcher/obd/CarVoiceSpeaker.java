@@ -2,6 +2,8 @@ package com.fordlauncher.launcher.obd;
 
 import android.content.Context;
 import android.media.AudioManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
@@ -47,6 +49,9 @@ public class CarVoiceSpeaker {
     public void setListener(Listener l) { listener = l; }
     public boolean isSpeaking() { return speaking; }
 
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private Runnable initTimeout;
+
     public void speak(final String rawText) {
         if (rawText == null || rawText.trim().length() == 0) return;
         final String clean = clean(rawText);
@@ -60,8 +65,25 @@ public class CarVoiceSpeaker {
     }
 
     private void startInit(final String engine, final boolean allowFallback) {
+        try { if (initTimeout != null) main.removeCallbacks(initTimeout); } catch (Throwable ignored) {}
+        initTimeout = new Runnable() {
+            public void run() {
+                if (ready) return;
+                Log.w(TAG, "TTS init timeout engine=" + engine);
+                try { if (tts != null) tts.shutdown(); } catch (Throwable ignored) {}
+                tts = null;
+                ready = false;
+                if (allowFallback && engine != null) {
+                    startInit(null, false);
+                } else {
+                    if (listener != null) listener.onError("La voz tardó demasiado en iniciar. Revisa el motor TTS del sistema.");
+                }
+            }
+        };
+        main.postDelayed(initTimeout, 6000);
         TextToSpeech.OnInitListener init = new TextToSpeech.OnInitListener() {
             public void onInit(int status) {
+                try { if (initTimeout != null) main.removeCallbacks(initTimeout); } catch (Throwable ignored) {}
                 if (status == TextToSpeech.SUCCESS && tts != null) {
                     try {
                         int r = tts.setLanguage(new Locale("es", "ES"));
@@ -192,12 +214,14 @@ public class CarVoiceSpeaker {
     }
 
     public void stop() {
+        try { if (initTimeout != null) main.removeCallbacks(initTimeout); } catch (Throwable ignored) {}
         try { if (tts != null) tts.stop(); } catch (Throwable ignored) {}
         setSpeaking(false);
         abandon();
     }
 
     public void shutdown() {
+        try { if (initTimeout != null) main.removeCallbacks(initTimeout); } catch (Throwable ignored) {}
         try { if (tts != null) { tts.stop(); tts.shutdown(); } } catch (Throwable ignored) {}
         tts = null; ready = false; speaking = false;
         abandon();
