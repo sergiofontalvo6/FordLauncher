@@ -76,13 +76,11 @@ public class CarVoiceSpeaker {
                         try { tts.setSpeechRate(0.95f); } catch (Throwable ignored) {}
                         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                             public void onStart(String id) { setSpeaking(true); }
-                            public void onDone(String id) {
-                                if (id != null && id.startsWith("chunk_")) {
-                                    doneChunks++;
-                                    if (doneChunks >= pendingChunks) { setSpeaking(false); abandon(); }
-                                } else { setSpeaking(false); abandon(); }
-                            }
-                            public void onError(String id) { setSpeaking(false); abandon(); }
+                            public void onDone(String id) { setSpeaking(false); abandon(); }
+                            @Override
+                            public void onError(String id) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz."); }
+                            @Override
+                            public void onError(String id, int errorCode) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz (" + errorCode + ")."); }
                         });
                         ready = true;
                         if (pending != null) { String p = pending; pending = null; doSpeak(p); }
@@ -103,38 +101,41 @@ public class CarVoiceSpeaker {
         doSpeak(clean);
     }
 
-    /** Texto largo se fragmenta en oraciones de ≤120 caracteres con QUEUE_ADD. */
+    /** Habla el texto. Se intenta en un solo bloque para máxima compatibilidad. */
     private void doSpeak(String clean) {
+        if (tts == null || !ready) return;
         if (clean == null || clean.length() == 0) return;
-        String s = clean.replaceAll("[*#_~`]", "").replaceAll("\\s+", " ").trim();
+        String s = clean.replaceAll("[*#_~`\\[\\]()]", " ").replaceAll("\\s+", " ").trim();
         if (s.length() == 0) return;
-        java.util.ArrayList<String> chunks = new java.util.ArrayList<String>();
-        String[] parts = s.split("(?<=[.!?])\\s+");
-        StringBuilder cur = new StringBuilder();
-        for (String p : parts) {
-            String t = p.trim();
-            if (t.length() == 0) continue;
-            if (cur.length() > 0 && cur.length() + 1 + t.length() > 120) { chunks.add(cur.toString()); cur.setLength(0); }
-            if (cur.length() > 0) cur.append(' ');
-            cur.append(t);
-        }
-        if (cur.length() > 0) chunks.add(cur.toString());
+        if (s.length() > 320) s = s.substring(0, 320);
         try { am.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK); } catch (Throwable ignored) {}
         setSpeaking(true);
-        pendingChunks = chunks.size();
+        pendingChunks = 1;
         doneChunks = 0;
-        for (int i = 0; i < chunks.size(); i++) {
-            int mode = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-            try {
+        try {
+            int res;
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
                 android.os.Bundle params = new android.os.Bundle();
-                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "chunk_" + i);
-                int res = tts.speak(chunks.get(i), mode, params, "chunk_" + i);
-                Log.w(TAG, "TTS speak chunk " + i + "/" + chunks.size() + " -> " + res);
-            } catch (Throwable e) {
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
+                params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
+                res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, "utt_0");
+            } else {
+                java.util.HashMap<String, String> params = new java.util.HashMap<String, String>();
+                params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
+                params.put(TextToSpeech.Engine.KEY_PARAM_STREAM, String.valueOf(AudioManager.STREAM_MUSIC));
+                res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params);
+            }
+            Log.w(TAG, "TTS speak -> " + res + " chars=" + s.length() + " text=" + s);
+            if (res == TextToSpeech.ERROR) {
                 setSpeaking(false);
                 abandon();
-                break;
+                if (listener != null) listener.onError("No se pudo reproducir la voz en este dispositivo.");
             }
+        } catch (Throwable e) {
+            Log.w(TAG, "TTS speak exception: " + e);
+            setSpeaking(false);
+            abandon();
+            if (listener != null) listener.onError("No se pudo reproducir la voz en este dispositivo.");
         }
     }
 
