@@ -99,9 +99,10 @@ public class CarVoiceSpeaker {
                 }
             };
             try {
-                tts = (prefEngine != null && prefEngine.length() > 0) ? new TextToSpeech(ctx, init, prefEngine) : new TextToSpeech(ctx, init);
+                String eng = (prefEngine != null && prefEngine.length() > 0) ? prefEngine : "com.google.android.tts";
+                tts = new TextToSpeech(ctx, init, eng);
             } catch (Throwable t) {
-                Log.w(TAG, "TTS constructor with pref engine failed: " + t);
+                Log.w(TAG, "TTS constructor with engine failed: " + t);
                 try { tts = new TextToSpeech(ctx, init); } catch (Throwable t2) {
                     Log.w(TAG, "TTS constructor failed: " + t2);
                     tts = null;
@@ -126,29 +127,47 @@ public class CarVoiceSpeaker {
         pendingChunks = 1;
         doneChunks = 0;
         try {
-            int res;
             if (android.os.Build.VERSION.SDK_INT >= 21) {
-                android.os.Bundle params = new android.os.Bundle();
-                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
-                params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
-                res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, "utt_0");
-            } else {
-                java.util.HashMap<String, String> params = new java.util.HashMap<String, String>();
-                params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
-                params.put(TextToSpeech.Engine.KEY_PARAM_STREAM, String.valueOf(AudioManager.STREAM_MUSIC));
-                res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params);
+                try {
+                    android.media.AudioAttributes aa = new android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .setLegacyStreamType(AudioManager.STREAM_MUSIC)
+                            .build();
+                    tts.setAudioAttributes(aa);
+                } catch (Throwable ignored) {}
             }
-            Log.w(TAG, "TTS speak -> " + res + " chars=" + s.length() + " text=" + s);
+            int res = TextToSpeech.ERROR;
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                    android.os.Bundle params = new android.os.Bundle();
+                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
+                    res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, "utt_0");
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "TTS speak bundle failed: " + t);
+            }
+            if (res == TextToSpeech.ERROR) {
+                try {
+                    java.util.HashMap<String, String> params = new java.util.HashMap<String, String>();
+                    params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utt_0");
+                    params.put(TextToSpeech.Engine.KEY_PARAM_STREAM, String.valueOf(AudioManager.STREAM_MUSIC));
+                    res = tts.speak(s, TextToSpeech.QUEUE_FLUSH, params);
+                } catch (Throwable t) {
+                    Log.w(TAG, "TTS speak legacy failed: " + t);
+                }
+            }
+            Log.w(TAG, "TTS speak -> " + res + " chars=" + s.length() + " engine=" + tts.getDefaultEngine());
             if (res == TextToSpeech.ERROR) {
                 setSpeaking(false);
                 abandon();
-                if (listener != null) listener.onError("No se pudo reproducir la voz en este dispositivo.");
+                if (listener != null) listener.onError("No se pudo reproducir la voz (TTS error). Revisa Salida de texto a voz en Ajustes.");
             }
         } catch (Throwable e) {
             Log.w(TAG, "TTS speak exception: " + e);
             setSpeaking(false);
             abandon();
-            if (listener != null) listener.onError("No se pudo reproducir la voz en este dispositivo.");
+            if (listener != null) listener.onError("No se pudo reproducir la voz: " + e.getMessage());
         }
     }
 
