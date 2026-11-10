@@ -165,6 +165,7 @@ public class Main extends Activity {
         try { parked = new ParkedModeManager(this); } catch (Throwable ignored) {}
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
         migrateOrSetup();
+        try { phonePrivacy = new PhonePrivacy(this); } catch (Throwable ignored) {}
         IntentFilter headlightFilter = new IntentFilter();
         headlightFilter.addAction("com.zjinnova.zlink.action.OUT_DARK_STOP");
         headlightFilter.addAction("com.zjinnova.zlink.action.OUT_DARK_START");
@@ -501,6 +502,8 @@ public class Main extends Activity {
         try { unregisterReceiver(usbReceiver); } catch (Throwable ignored) { }
         try { bt.disconnect(); } catch (Throwable ignored) { }
         try { unregisterReceiver(btConnReceiver); } catch (Throwable ignored) { }
+        try { if (phonePrivacy != null) phonePrivacy.close(); } catch (Throwable ignored) { }
+        try { if (callWin != null) callWin.hide(); } catch (Throwable ignored) { }
         try { unregisterReceiver(headlightReceiver); } catch (Throwable ignored) { }
         if (brightnessObserver != null) {
             try {
@@ -1737,6 +1740,23 @@ public class Main extends Activity {
 
     private FrameLayout phoneView;
     private TelefonoView phone;
+    private PhonePrivacy phonePrivacy;
+    private ThemedCallWindow callWin;
+
+    ThemedCallWindow callWindow() {
+        if (callWin == null) callWin = new ThemedCallWindow(this, s > 0 ? s : 1f, phonePrivacy != null ? phonePrivacy.hfp() : null);
+        return callWin;
+    }
+
+    /** Estados HFP llegan desde PhonePrivacy aunque el panel Teléfono esté cerrado. */
+    void onPhoneCallState(String state, String number) {
+        int st;
+        try { st = Integer.parseInt(state); } catch (Throwable t) { return; }
+        try {
+            if (st == 7) callWindow().finish();
+            else if (st >= 0) callWindow().show(number, null, st);
+        } catch (Throwable ignored) {}
+    }
 
     static final String[] PHONE_PERMS = {"android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS",
             "android.permission.READ_CALL_LOG", "android.permission.WRITE_CALL_LOG", "android.permission.CALL_PHONE"};
@@ -2398,8 +2418,17 @@ public class Main extends Activity {
             "cn.manstep.phonemirrorBox.nomap", "com.suding.speedplay", "com.tlink.carplay", "com.syu.carlink", "com.carlinkit.autokit"};
 
     private void rebuild() {
+        boolean phoneOpen = phoneView != null;
         builtW = 0;
-        if (root.getWidth() > 0) build(root.getWidth(), root.getHeight());
+        if (root.getWidth() > 0) {
+            if (phoneOpen) {
+                try { if (phone != null) phone.destroy(); } catch (Throwable ignored) {}
+                phoneView = null;
+                phone = null;
+            }
+            build(root.getWidth(), root.getHeight());
+            if (phoneOpen) openPhone();
+        }
     }
 
     private void applyAccent() {
@@ -2821,6 +2850,17 @@ public class Main extends Activity {
             BG = 0xFF15171C; CARD = 0xFF1E2128; INNER = 0xFF262A33; BTN = 0xFF2A2E37; DOCK = 0xFF0D0E11;
             TEXT = 0xFFF2F3F5; MUTED = 0xFF8B9099; SOFT = 0xFFC5C8CE; CIRCLE = 0xFF23262E; ICON = 0xFFFFFFFF;
         }
+        syncThemeToSeldia();
+    }
+
+    /** Envía el tema actual a Seldia Music (si está instalada) para que lo aplique. */
+    private void syncThemeToSeldia() {
+        try {
+            Intent i = new Intent("com.fordlauncher.launcher.action.APPLY_THEME");
+            i.setPackage("com.seldia.music");
+            i.putExtra("theme", LIGHT ? "light" : "dark");
+            sendBroadcast(i);
+        } catch (Throwable ignored) {}
     }
 
     // ───────────────────────── clima ─────────────────────────
@@ -3808,6 +3848,18 @@ public class Main extends Activity {
 
     private void openSlot(int idx) {
         String key = SLOTS[idx][0];
+        if ("music".equals(key)) {
+            try {
+                Intent si = getPackageManager().getLaunchIntentForPackage("com.seldia.music");
+                if (si != null) {
+                    si.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    si.putExtra("com.fordlauncher.theme", LIGHT ? "light" : "dark");
+                    startActivity(si);
+                    syncThemeToSeldia();
+                    return;
+                }
+            } catch (Throwable ignored) {}
+        }
         if (launchSaved(key)) return;
         if ("settings".equals(key)) {
             startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

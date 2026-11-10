@@ -38,10 +38,13 @@ import java.io.InputStream;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -51,9 +54,16 @@ import java.util.concurrent.Executors;
  * Módulo Teléfono (reemplaza al botón Cámara del dock): dos columnas asimétricas.
  * Columna izquierda fija (32%) con Favoritos; columna derecha (68%) con tres
  * pestañas (Recientes | Contactos | Teclado) y botón de cierre. En la pestaña
- * Recientes hay un switch estilo iOS para filtrar números desconocidos. Las
- * llamadas se emiten con los broadcasts del SoC AC8227L (AutoChips/GooCo/TS) y
- * un overlay propio de llamada en curso evita que la app del sistema se superponga.
+ * Recientes hay un switch estilo iOS para filtrar números desconocidos.
+ *
+ * <p>Las llamadas se emiten por <b>Bluetooth HFP real</b> ({@link HfpClient} →
+ * {@code BluetoothHeadsetClient.dial()}), la misma vía que usa la app de
+ * fábrica {@code com.autochips.bluetooth} (BTSuite / 8227L_demo) en su
+ * {@code BtDialPadActivity}. Los broadcasts genéricos antiguos
+ * ({@code com.autochips.bluetooth.action.DIAL}, {@code com.goodocom...},
+ * etc.) <b>no</b> los escucha esta firmware y se conservan solo como fallback
+ * silencioso. Un overlay propio de llamada en curso evita que la app del
+ * sistema se superponga, pero el control de llamada (colgar/contestar) va por HFP.
  */
 public class TelefonoView {
     private final Main host;
@@ -93,8 +103,16 @@ public class TelefonoView {
     private Chronometer callTimer;
     private EditText searchEt;
     private TextView dialNumber;
+    private TextView btStatus;
     private String dialText = "";
     private ToneGenerator tone;
+    private HfpClient hfp;
+    private ThemedCallWindow themedWindow;
+    private String btStatusText = "Bluetooth HFP: buscando celular…";
+
+    // Privacidad: la limpieza automática la hace PhonePrivacy (en Main); aquí solo se refleja.
+    private boolean contactsHidden;
+    private boolean phoneOn;
 
     private int BG() { return Main.BG; }
     private int CARD() { return Main.CARD; }
@@ -129,7 +147,7 @@ public class TelefonoView {
         card.setBackground(rounded(CARD(), 16, 0));
         card.setPadding((int) (14 * s), (int) (12 * s), (int) (14 * s), (int) (12 * s));
         if (titleSmall != null) {
-            TextView h = txt(titleSmall, 11, MUTED(), true);
+            TextView h = txt(titleSmall, 13, MUTED(), true);
             h.setText(titleSmall.toUpperCase());
             h.setMaxLines(1);
             h.setEllipsize(TextUtils.TruncateAt.END);
@@ -141,7 +159,179 @@ public class TelefonoView {
         return card;
     }
 
-    public TelefonoView(Main h, float scale) { host = h; s = scale; }
+    public TelefonoView(Main h, float scale) {
+        host = h; s = scale * 1.22f; // rediseño: panel más grande (antes se veía muy pequeño)
+        contactsHidden = host.getPrefs().getBoolean(PhonePrivacy.K_HIDDEN, false);
+        hfp = new HfpClient(host);
+        hfp.setListener(new HfpClient.CallListener() {
+            @Override public void onDialResult(boolean success, String detail) {
+                setBtStatus(detail);
+                if (!success) {
+                    try { host.callWindow().hide(); } catch (Throwable ignored) {}
+                    toast(detail);
+                    return;
+                }
+                // Al colgar, el historial del radio tardará un momento en registrar
+                // la llamada; recargamos Recientes poco después.
+                ui.postDelayed(new Runnable() {
+                    public void run() {
+                        callsReady = false;
+                        if (tab == 0 && content != null && content.isAttachedToWindow()) render();
+                    }
+                }, 5000);
+            }
+            @Override public void onConnectionChanged(String deviceName) {
+                phoneOn = deviceName != null;
+                if (deviceName != null) setBtStatus("Bluetooth HFP: " + deviceName + " conectado");
+                else setBtStatus("Bluetooth HFP: celular no conectado");
+                if (!phoneOn) {
+                    if (themedWindow != null) themedWindow.hide();
+                    if (autoClean()) { contacts.clear(); calls.clear(); contactsReady = false; callsReady = false; }
+                }
+                if (content != null && content.isAttachedToWindow()) render();
+                // PhonePrivacy (Main) puede limpiar datos en este mismo instante: refrescamos después.
+                ui.postDelayed(new Runnable() {
+                    public void run() { syncPrivacyState(); }
+                }, 1500);
+            }
+            @Override public void onCallChanged(String state, String number) {
+                if (state != null && state.length() > 0) setBtStatus("Llamada: " + state);
+                // Se deja la ventana de fábrica (BTSuite) como única UI de llamada.
+                if ("7".equals(state)) {
+                    callsReady = false; // terminada: refresca Recientes
+                    if (tab == 0 && content != null && content.isAttachedToWindow()) render();
+                }
+            }
+        });
+        hfp.requestProxy();
+        themedWindow = null;
+    }
+
+    private void setBtStatus(String t) {
+        btStatusText = t;
+        if (btStatus != null) btStatus.setText(t);
+    }
+
+    private String currentMac() {
+        try {
+            if (hfp != null && hfp.getConnectedDevice() != null) return hfp.getConnectedDevice().getAddress();
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private void saveBool(String key, boolean value) {
+        try { host.getPrefs().edit().putBoolean(key, value).apply(); } catch (Throwable ignored) {}
+    }
+
+    private void savePref(String key, String value) {
+        try { host.getPrefs().edit().putString(key, value).apply(); } catch (Throwable ignored) {}
+    }
+
+    // ---------- PRIVACIDAD ----------
+
+    /** Diálogo con borrado manual y limpieza automática al desconectar. */
+    private void showPrivacyDialog() {
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (18 * s);
+        col.setPadding(pad, pad, pad, pad);
+
+        TextView info = txt("Al prestar el carro o conectar otro celular, los contactos y el historial pueden mezclarse. Aquí puedes borrarlos cuando quieras.", 14, MUTED(), false);
+        info.setMaxLines(4);
+        col.addView(info, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout autoRow = new LinearLayout(host);
+        autoRow.setOrientation(LinearLayout.HORIZONTAL);
+        autoRow.setGravity(Gravity.CENTER_VERTICAL);
+        autoRow.setPadding(0, (int) (16 * s), 0, (int) (4 * s));
+        TextView autoLabel = txt("Limpiar al desconectar el celular", 15, TEXT(), false);
+        autoRow.addView(autoLabel, new LinearLayout.LayoutParams(0, -2, 1f));
+        Switch autoSw = new Switch(host);
+        autoSw.setChecked(autoClean());
+        try {
+            autoSw.setThumbTintList(android.content.res.ColorStateList.valueOf(ACCENT()));
+            autoSw.setTrackTintList(android.content.res.ColorStateList.valueOf((ACCENT() & 0x00FFFFFF) | 0x66000000));
+        } catch (Throwable ignored) {}
+        autoSw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean on) { toggleAutoClean(on); }
+        });
+        autoRow.addView(autoSw, new LinearLayout.LayoutParams(-2, -2));
+        col.addView(autoRow, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView hint = txt("Automático: borra contactos e historial 8 segundos después de desconectarse el celular. Si vuelve a conectar el mismo celular, los contactos se muestran otra vez.", 12, MUTED(), false);
+        hint.setMaxLines(4);
+        col.addView(hint, new LinearLayout.LayoutParams(-1, -2));
+
+        new android.app.AlertDialog.Builder(host, Main.dlg())
+                .setTitle("Privacidad del teléfono")
+                .setView(col)
+                .setPositiveButton("Borrar ahora", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) { confirmClean(); }
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private boolean autoClean() {
+        return host.getPrefs().getBoolean(PhonePrivacy.K_AUTO, false);
+    }
+
+    private void toggleAutoClean(boolean on) {
+        saveBool(PhonePrivacy.K_AUTO, on);
+        if (!on) {
+            saveBool(PhonePrivacy.K_PENDING, false);
+        } else if (host.getPrefs().getString(PhonePrivacy.K_OWNER, null) == null) {
+            String mac = currentMac();
+            if (mac != null) savePref(PhonePrivacy.K_OWNER, mac);
+        }
+        toast(on ? "Limpieza automática activada" : "Limpieza automática desactivada");
+    }
+
+    /** Vuelve a leer el estado de privacidad (puede haber cambiado en segundo plano). */
+    private void syncPrivacyState() {
+        boolean hidden = host.getPrefs().getBoolean(PhonePrivacy.K_HIDDEN, false);
+        if (hidden != contactsHidden || hidden) {
+            contactsHidden = hidden;
+            if (hidden) { contacts.clear(); calls.clear(); }
+            contactsReady = false;
+            callsReady = false;
+            if (content != null && content.isAttachedToWindow()) render();
+        }
+    }
+
+    private void confirmClean() {
+        new android.app.AlertDialog.Builder(host, Main.dlg())
+                .setTitle("¿Borrar los datos del teléfono?")
+                .setMessage("Se borrarán el historial de llamadas, los favoritos y los contactos mostrados. Los contactos de la cuenta de Google no se eliminan: solo se ocultan hasta que toques «Mostrar contactos» o «Sincronizar».")
+                .setPositiveButton("Borrar", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) { performClean(true); }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    /**
+     * Borra el historial Bluetooth y el CallLog estándar, olvida los favoritos y
+     * oculta los contactos. Los contactos del sistema no se tocan para no
+     * sincronizar el borrado con la cuenta de Google.
+     */
+    private void performClean(final boolean manual) {
+        int deleted = PhonePrivacy.clean(host);
+        contactsHidden = true;
+
+        contacts.clear();
+        calls.clear();
+        photoCache.clear();
+        nameCache.clear();
+        contactsReady = false;
+        callsReady = false;
+        contactsLoading = false;
+        callsLoading = false;
+
+        if (content != null && content.isAttachedToWindow()) render();
+
+        if (manual) toast(deleted > 0 ? "Datos borrados (" + deleted + " llamadas)" : "Datos borrados");
+    }
 
     public FrameLayout build() {
         FrameLayout wrap = new FrameLayout(host);
@@ -156,7 +346,7 @@ public class TelefonoView {
         LinearLayout left = new LinearLayout(host);
         left.setOrientation(LinearLayout.VERTICAL);
         left.setPadding(0, 0, (int) (10 * s), 0);
-        TextView leftTitle = txt("★ Favoritos", 15, TEXT(), true);
+        TextView leftTitle = txt("★ Favoritos", 18, TEXT(), true);
         leftTitle.setPadding((int) (6 * s), (int) (4 * s), 0, (int) (10 * s));
         left.addView(leftTitle, new LinearLayout.LayoutParams(-1, -2));
         ScrollView favSc = new ScrollView(host);
@@ -189,7 +379,7 @@ public class TelefonoView {
         tabBar.setGravity(Gravity.CENTER_VERTICAL);
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int idx = i;
-            TextView t = txt(TAB_NAMES[i], 12, TEXT(), true);
+            TextView t = txt(TAB_NAMES[i], 15, TEXT(), true);
             t.setGravity(Gravity.CENTER);
             t.setMaxLines(1);
             t.setEllipsize(TextUtils.TruncateAt.END);
@@ -200,14 +390,28 @@ public class TelefonoView {
             tabBar.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
         }
         header.addView(tabBar, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView close = txt("✕", 15, MUTED(), false);
+        TextView trash = txt("🗑", 18, MUTED(), false);
+        trash.setGravity(Gravity.CENTER);
+        trash.setPadding((int) (10 * s), (int) (6 * s), (int) (10 * s), (int) (6 * s));
+        trash.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { showPrivacyDialog(); }
+        });
+        header.addView(trash, new LinearLayout.LayoutParams(-2, -2));
+        TextView close = txt("✕", 20, MUTED(), false);
         close.setGravity(Gravity.CENTER);
         close.setPadding((int) (12 * s), (int) (6 * s), (int) (12 * s), (int) (6 * s));
         close.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { host.closePhone(); }
         });
         header.addView(close, new LinearLayout.LayoutParams(-2, -2));
-        right.addView(header, new LinearLayout.LayoutParams(-1, (int) (38 * s)));
+        right.addView(header, new LinearLayout.LayoutParams(-1, (int) (46 * s)));
+
+        // Estado Bluetooth HFP (la vía real de llamada en el 8227L_demo)
+        btStatus = txt(btStatusText, 13, MUTED(), false);
+        btStatus.setPadding((int) (6 * s), 0, (int) (6 * s), (int) (6 * s));
+        btStatus.setMaxLines(1);
+        btStatus.setEllipsize(TextUtils.TruncateAt.END);
+        right.addView(btStatus, new LinearLayout.LayoutParams(-1, -2));
 
         ScrollView sc = new ScrollView(host);
         sc.setVerticalScrollBarEnabled(false);
@@ -239,7 +443,12 @@ public class TelefonoView {
         }
     }
 
-    private void selectTab(int i) { tab = i; render(); }
+    private void selectTab(int i) {
+        // Al abrir Recientes se recarga el historial real del radio (BTSuite),
+        // así aparecen las llamadas hechas/recibidas desde la última vez.
+        if (i == 0) callsReady = false;
+        tab = i; render();
+    }
 
     public void refresh() { render(); }
 
@@ -248,6 +457,7 @@ public class TelefonoView {
         paintTabs();
         renderFavorites();
         content.removeAllViews();
+        if (privacyLocked() && tab != 2) { lockedCard(); return; }
         if (!host.phonePermsGranted() && tab != 2) {
             permCard();
             return;
@@ -259,9 +469,20 @@ public class TelefonoView {
         }
     }
 
+    /** Con limpieza automática, sin el celular conectado no se muestran contactos ni historial. */
+    private boolean privacyLocked() { return autoClean() && !phoneOn; }
+
+    private void lockedCard() {
+        LinearLayout c = card(content, "Privacidad");
+        TextView t = txt("Conecta tu celular por Bluetooth para ver contactos e historial. Con la limpieza automática activa, sin celular conectado no se muestran.", 14, MUTED(), false);
+        t.setMaxLines(4);
+        t.setPadding(0, (int) (6 * s), 0, 0);
+        c.addView(t, new LinearLayout.LayoutParams(-1, -2));
+    }
+
     /** Carga contactos en segundo plano (nunca en el hilo de UI). */
     private void loadContactsAsync() {
-        if (contactsLoading || contactsReady) return;
+        if (contactsHidden || contactsLoading || contactsReady) return;
         contactsLoading = true;
         bg.execute(new Runnable() {
             public void run() {
@@ -311,14 +532,26 @@ public class TelefonoView {
     private void renderFavorites() {
         if (favList == null) return;
         favList.removeAllViews();
+        if (privacyLocked()) {
+            TextView t = txt("Conecta el celular para ver favoritos.", 14, MUTED(), false);
+            t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
+            favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
         if (!host.phonePermsGranted()) {
-            TextView t = txt("Sin permiso de contactos.", 12, MUTED(), false);
+            TextView t = txt("Sin permiso de contactos.", 14, MUTED(), false);
+            t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
+            favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
+        if (contactsHidden) {
+            TextView t = txt("Contactos ocultos por privacidad.", 14, MUTED(), false);
             t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
             favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
         }
         if (!contactsReady) {
-            TextView t = txt("Cargando contactos…", 12, MUTED(), false);
+            TextView t = txt("Cargando contactos…", 14, MUTED(), false);
             t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
             favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
             loadContactsAsync();
@@ -327,7 +560,7 @@ public class TelefonoView {
         List<Contact> favs = new ArrayList<Contact>();
         for (Contact ct : contacts) if (ct.starred) favs.add(ct);
         if (favs.isEmpty()) {
-            TextView t = txt("Sin favoritos. En Contactos toca la estrella para marcar.", 12, MUTED(), false);
+            TextView t = txt("Sin favoritos. En Contactos toca la estrella o usa «Importar favoritos».", 14, MUTED(), false);
             t.setPadding((int) (6 * s), (int) (6 * s), 0, 0);
             favList.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
@@ -340,24 +573,28 @@ public class TelefonoView {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding((int) (4 * s), (int) (8 * s), (int) (4 * s), (int) (8 * s));
-        ImageView photo = avatar(ct, (int) (42 * s));
-        row.addView(photo, new LinearLayout.LayoutParams((int) (42 * s), (int) (42 * s)));
+        row.setClickable(true);
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { callNumber(ct.number); }
+        });
+        ImageView photo = avatar(ct, (int) (50 * s));
+        row.addView(photo, new LinearLayout.LayoutParams((int) (50 * s), (int) (50 * s)));
         LinearLayout col = new LinearLayout(host);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding((int) (10 * s), 0, (int) (6 * s), 0);
-        TextView nm = txt(ct.name, 15, TEXT(), true);
+        TextView nm = txt(ct.name, 18, TEXT(), true);
         nm.setMaxLines(1);
         nm.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(nm, new LinearLayout.LayoutParams(-1, -2));
-        TextView nb = txt(ct.number, 12, MUTED(), false);
+        TextView nb = txt(ct.number, 14, MUTED(), false);
         nb.setMaxLines(1);
         nb.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(nb, new LinearLayout.LayoutParams(-1, -2));
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView cb = txt("📞", 14, Color.WHITE, false);
+        TextView cb = txt("📞", 20, Color.WHITE, false);
         cb.setGravity(Gravity.CENTER);
-        cb.setBackground(rounded(0xFF2DBE6C, 18, 0));
-        cb.setPadding((int) (10 * s), (int) (8 * s), (int) (10 * s), (int) (8 * s));
+        cb.setBackground(rounded(ACCENT(), 22, 0));
+        cb.setPadding((int) (12 * s), (int) (10 * s), (int) (12 * s), (int) (10 * s));
         cb.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { callNumber(ct.number); }
         });
@@ -368,18 +605,17 @@ public class TelefonoView {
     // ---------- llamadas ----------
     private void toast(String m) { try { android.widget.Toast.makeText(host, m, android.widget.Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {} }
 
-    /** Emite la llamada por los broadcasts del SoC AC8227L y muestra el overlay propio. */
+    /** Marcar por HFP real (BluetoothHeadsetClient), la vía del radio. */
     void callNumber(String number) {
         if (number == null) return;
         String n = cleanNumber(number);
         if (n == null) { toast("Número vacío"); return; }
-        // 1. Broadcasts para la radio china (evitan abrir la app de sistema).
-        try { host.sendBroadcast(new Intent("com.autochips.bluetooth.action.DIAL").putExtra("phone_number", n)); } catch (Throwable ignored) {}
-        try { host.sendBroadcast(new Intent("com.goodocom.gocsdk.DIAL").putExtra("dial_number", n)); } catch (Throwable ignored) {}
-        try { host.sendBroadcast(new Intent("com.ts.bt.dial").putExtra("dial_num", n)); } catch (Throwable ignored) {}
-        try { host.sendBroadcast(new Intent("com.android.ecar.bthf.DIAL").putExtra("dial_number", n)); } catch (Throwable ignored) {}
-        // 2. Overlay propio de llamada en curso dentro de FiestaLauncher.
-        showCallOverlay(n);
+        if (hfp == null) { toast("Bluetooth no disponible"); return; }
+        // HfpClient comprueba el dispositivo conectado y avisa por
+        // onDialResult (estado + toast) si el celular no está conectado.
+        hfp.dial(n);
+        // Interfaz propia de llamada desde el primer momento (no esperar al evento HFP).
+        try { host.callWindow().show(n, null, 2); } catch (Throwable ignored) {}
     }
 
     private static String cleanNumber(String n) {
@@ -488,23 +724,20 @@ public class TelefonoView {
     }
 
     private void showCallOverlay(String number) {
+        // Se deja la ventana de fábrica (BTSuite PhoneCallActivity) como única UI de llamada.
+        // No se muestra overlay interno ni flotante de FordLauncher para evitar duplicados.
         String name = lookupName(number);
-        ovName.setText(name != null ? name : number);
-        ovNumber.setText(name != null ? number : "Llamando…");
-        if (name != null) {
-            Contact ct = new Contact();
-            ct.key = number; ct.name = name; ct.number = number;
-            ovAvatar.setImageBitmap(null);
-            ovAvatar.setImageDrawable(placeholder(name, (int) (72 * s)));
-        } else {
-            ovAvatar.setImageDrawable(placeholder("", (int) (72 * s)));
-        }
-        callTimer.setBase(SystemClock.elapsedRealtime());
-        callTimer.start();
-        callOverlay.setVisibility(View.VISIBLE);
+        // Solo actualizamos textos por si se reutiliza en el futuro, pero no hacemos visible nada.
+        try {
+            ovName.setText(name != null ? name : number);
+            ovNumber.setText(name != null ? number : "Llamando…");
+        } catch (Throwable ignored) {}
+        try { if (callOverlay != null) callOverlay.setVisibility(View.GONE); } catch (Throwable ignored) {}
+        try { if (themedWindow != null) themedWindow.hide(); } catch (Throwable ignored) {}
     }
 
     private void hangUp() {
+        try { if (hfp != null) hfp.hangUp(); } catch (Throwable ignored) {}
         try { host.sendBroadcast(new Intent("com.autochips.bluetooth.action.HANGUP")); } catch (Throwable ignored) {}
         try { host.sendBroadcast(new Intent("com.goodocom.gocsdk.HANGUP")); } catch (Throwable ignored) {}
         try { callTimer.stop(); } catch (Throwable ignored) {}
@@ -516,6 +749,7 @@ public class TelefonoView {
             ovSpeaker.setText("🔊 Altavoz");
         } catch (Throwable ignored) {}
         callOverlay.setVisibility(View.GONE);
+        try { if (themedWindow != null) themedWindow.hide(); } catch (Throwable ignored) {}
     }
 
     private void dtmfDialog() {
@@ -534,7 +768,10 @@ public class TelefonoView {
                 b.setBackground(rounded(INNER(), 12, 0));
                 b.setPadding((int) (16 * s), (int) (12 * s), (int) (16 * s), (int) (12 * s));
                 b.setOnClickListener(new View.OnClickListener() {
-                    public void onClick(View v) { beepDigit(d); }
+                    public void onClick(View v) {
+                        beepDigit(d);
+                        try { if (hfp != null) hfp.sendDtmf(d.charAt(0)); } catch (Throwable ignored) {}
+                    }
                 });
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
                 lp.leftMargin = (int) (4 * s); lp.rightMargin = (int) (4 * s);
@@ -569,11 +806,15 @@ public class TelefonoView {
         swRow.setPadding(0, (int) (4 * s), 0, (int) (10 * s));
         View spacer = new View(host);
         swRow.addView(spacer, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView swLabel = txt("Números desconocidos", 13, MUTED(), false);
+        TextView swLabel = txt("Números desconocidos", 15, MUTED(), false);
         swRow.addView(swLabel, new LinearLayout.LayoutParams(-2, -2));
         Switch sw = new Switch(host);
         sw.setPadding((int) (8 * s), 0, 0, 0);
         sw.setChecked(unknownOnly);
+        try {
+            sw.setThumbTintList(android.content.res.ColorStateList.valueOf(ACCENT()));
+            sw.setTrackTintList(android.content.res.ColorStateList.valueOf((ACCENT() & 0x00FFFFFF) | 0x66000000));
+        } catch (Throwable ignored) {}
         sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
             public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
                 if (unknownOnly != on) { unknownOnly = on; render(); }
@@ -592,7 +833,7 @@ public class TelefonoView {
             if (a) shown.add(r);
         }
         if (shown.isEmpty()) {
-            TextView t = txt(unknownOnly ? "Sin números desconocidos." : "Sin llamadas en este grupo.", 13, MUTED(), false);
+            TextView t = txt(unknownOnly ? "Sin números desconocidos." : "Sin llamadas en este grupo.", 15, MUTED(), false);
             t.setPadding(0, (int) (4 * s), 0, 0);
             c.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
@@ -615,25 +856,30 @@ public class TelefonoView {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, (int) (10 * s), 0, (int) (10 * s));
+        row.setPadding(0, (int) (11 * s), 0, (int) (11 * s));
+        row.setClickable(true);
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { callNumber(r.number); }
+        });
         LinearLayout col = new LinearLayout(host);
         col.setOrientation(LinearLayout.VERTICAL);
         String title = r.name != null ? r.name : (r.number != null ? r.number : "Desconocido");
-        TextView nm = txt(title, 15, missed ? 0xFFF44336 : TEXT(), !missed);
+        TextView nm = txt(title, 18, missed ? 0xFFF44336 : TEXT(), !missed);
         nm.setMaxLines(1);
         nm.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(nm, new LinearLayout.LayoutParams(-1, -2));
         String sub = recTypeName(r.type) + " · " + relDate(r.date);
         if (r.name != null && r.number != null) sub = recTypeName(r.type) + " · " + r.number + " · " + relDate(r.date);
-        TextView sb = txt(sub, 11, MUTED(), false);
+        TextView sb = txt(sub, 13, MUTED(), false);
         sb.setMaxLines(1);
         sb.setEllipsize(TextUtils.TruncateAt.END);
         sb.setPadding(0, (int) (2 * s), 0, 0);
         col.addView(sb, new LinearLayout.LayoutParams(-1, -2));
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView cb = txt("📞", 16, ACCENT(), false);
+        TextView cb = txt("📞", 20, Color.WHITE, false);
         cb.setGravity(Gravity.CENTER);
-        cb.setPadding((int) (12 * s), (int) (8 * s), (int) (12 * s), (int) (8 * s));
+        cb.setBackground(rounded(ACCENT(), 22, 0));
+        cb.setPadding((int) (12 * s), (int) (10 * s), (int) (12 * s), (int) (10 * s));
         cb.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { callNumber(r.number); }
         });
@@ -654,14 +900,41 @@ public class TelefonoView {
 
     // ---------- CONTACTOS ----------
     private void contactsTab() {
-        if (!contactsReady) {
-            loadContactsAsync();
-            LinearLayout c = card(content, "Contactos del equipo");
-            TextView t = txt("Cargando contactos…", 13, MUTED(), false);
-            t.setPadding(0, (int) (6 * s), 0, 0);
-            c.addView(t, new LinearLayout.LayoutParams(-1, -2));
+        if (contactsHidden) {
+            LinearLayout hc = card(content, "Privacidad");
+            TextView ht = txt("Los contactos están ocultos para que no se mezclen con los de otro celular. Toca «Mostrar contactos» para volver a cargarlos desde el teléfono conectado.", 14, MUTED(), false);
+            ht.setMaxLines(4);
+            ht.setPadding(0, (int) (6 * s), 0, (int) (10 * s));
+            hc.addView(ht, new LinearLayout.LayoutParams(-1, -2));
+            TextView show = txt("Mostrar contactos", 15, Color.WHITE, true);
+            show.setGravity(Gravity.CENTER);
+            show.setBackground(rounded(ACCENT(), 14, 0));
+            show.setPadding((int) (18 * s), (int) (9 * s), (int) (18 * s), (int) (9 * s));
+            show.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    if (!phoneOn) { toast("Conecta tu celular para mostrar contactos"); return; }
+                    contactsHidden = false;
+                    saveBool("phone_contacts_hidden", false);
+                    contactsReady = false;
+                    loadContacts();
+                    contactsReady = true;
+                    render();
+                    toast("Contactos visibles de nuevo");
+                }
+            });
+            hc.addView(show, new LinearLayout.LayoutParams(-2, -2));
             return;
         }
+
+        if (!contactsReady) {
+            loadContactsAsync();
+            LinearLayout lc = card(content, "Contactos del equipo");
+            TextView lt = txt("Cargando contactos…", 13, MUTED(), false);
+            lt.setPadding(0, (int) (6 * s), 0, 0);
+            lc.addView(lt, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
+
         LinearLayout c = card(content, "Contactos del equipo");
 
         // Buscador con limpiar (X)
@@ -670,7 +943,7 @@ public class TelefonoView {
         searchEt.setTextColor(TEXT());
         searchEt.setHintTextColor(MUTED());
         searchEt.setHint("Buscar contacto o número…");
-        searchEt.setTextSize(14);
+        searchEt.setTextSize(16);
         final LinearLayout colHolder = new LinearLayout(host);
         colHolder.setOrientation(LinearLayout.HORIZONTAL);
         colHolder.setGravity(Gravity.CENTER_VERTICAL);
@@ -680,7 +953,7 @@ public class TelefonoView {
             public void afterTextChanged(Editable e) { }
         });
         colHolder.addView(searchEt, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView clear = txt("✕", 16, MUTED(), false);
+        TextView clear = txt("✕", 18, MUTED(), false);
         clear.setGravity(Gravity.CENTER);
         clear.setPadding((int) (10 * s), 0, (int) (10 * s), 0);
         clear.setOnClickListener(new View.OnClickListener() {
@@ -695,14 +968,43 @@ public class TelefonoView {
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         btnRow.setGravity(Gravity.CENTER);
         btnRow.setPadding(0, (int) (8 * s), 0, (int) (4 * s));
-        TextView sync = txt("Sincronizar contactos", 13, TEXT(), true);
+        TextView sync = txt("⟳  Sincronizar", 15, TEXT(), true);
         sync.setGravity(Gravity.CENTER);
-        sync.setBackground(rounded(INNER(), 14, 0));
-        sync.setPadding((int) (14 * s), (int) (6 * s), (int) (14 * s), (int) (6 * s));
+        sync.setBackground(rounded(INNER(), 16, 0));
+        sync.setPadding((int) (14 * s), (int) (9 * s), (int) (14 * s), (int) (9 * s));
         sync.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { loadContacts(); renderContactList(colHolder); toast("Contactos sincronizados"); }
+            public void onClick(View v) {
+                if (!phoneOn) { toast("Conecta tu celular para sincronizar contactos"); return; }
+                if (contactsHidden) {
+                    contactsHidden = false;
+                    saveBool("phone_contacts_hidden", false);
+                }
+                contactsReady = false;
+                loadContacts();
+                contactsReady = true;
+                render();
+                toast("Contactos sincronizados");
+            }
         });
         btnRow.addView(sync);
+        TextView imp = txt("★  Importar favoritos", 15, Color.WHITE, true);
+        imp.setGravity(Gravity.CENTER);
+        imp.setBackground(rounded(ACCENT(), 16, 0));
+        imp.setPadding((int) (14 * s), (int) (9 * s), (int) (14 * s), (int) (9 * s));
+        imp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int n = importFavorites(true);
+                int total = 0;
+                for (Contact ct : contacts) if (ct.starred) total++;
+                if (n > 0) toast("Favoritos importados: " + n);
+                else if (total > 0) toast("Favoritos actualizados (" + total + ")");
+                else toast("Tu celular no expone favoritos. Marca contactos con la estrella.");
+                render();
+            }
+        });
+        LinearLayout.LayoutParams impLp = new LinearLayout.LayoutParams(-2, -2);
+        impLp.leftMargin = (int) (8 * s);
+        btnRow.addView(imp, impLp);
         c.addView(btnRow, new LinearLayout.LayoutParams(-1, -2));
 
         renderContactList(colHolder);
@@ -724,7 +1026,7 @@ public class TelefonoView {
             if (q.length() == 0 || hay.contains(q)) shown.add(ct);
         }
         if (shown.isEmpty()) {
-            TextView t = txt("Sin resultados.", 13, MUTED(), false);
+            TextView t = txt("Sin resultados.", 15, MUTED(), false);
             t.setTag("contactRow");
             c.addView(t, new LinearLayout.LayoutParams(-1, -2));
             return;
@@ -732,7 +1034,7 @@ public class TelefonoView {
         int limit = q.length() == 0 ? Math.min(shown.size(), 40) : shown.size();
         for (int i = 0; i < limit; i++) c.addView(contactRow(shown.get(i)), new LinearLayout.LayoutParams(-1, -2));
         if (limit < shown.size()) {
-            TextView more = txt("Mostrando " + limit + " de " + shown.size() + " — escribe para buscar en el resto.", 11, MUTED(), false);
+            TextView more = txt("Mostrando " + limit + " de " + shown.size() + " — escribe para buscar en el resto.", 13, MUTED(), false);
             more.setTag("contactRow");
             more.setPadding(0, (int) (6 * s), 0, 0);
             c.addView(more, new LinearLayout.LayoutParams(-1, -2));
@@ -743,32 +1045,38 @@ public class TelefonoView {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, (int) (8 * s), 0, (int) (8 * s));
+        row.setPadding(0, (int) (9 * s), 0, (int) (9 * s));
         row.setTag("contactRow");
-        ImageView photo = avatar(ct, (int) (40 * s));
+        row.setClickable(true);
+        // Toda la fila llama: antes solo el iconito 📞 respondía y parecía "no hacer nada".
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { callNumber(ct.number); }
+        });
+        ImageView photo = avatar(ct, (int) (52 * s));
         photo.setPadding(0, 0, (int) (10 * s), 0);
-        row.addView(photo, new LinearLayout.LayoutParams((int) (40 * s), (int) (40 * s)));
+        row.addView(photo, new LinearLayout.LayoutParams((int) (52 * s), (int) (52 * s)));
         LinearLayout col = new LinearLayout(host);
         col.setOrientation(LinearLayout.VERTICAL);
-        TextView nm = txt(ct.name, 15, TEXT(), true);
+        TextView nm = txt(ct.name, 18, TEXT(), true);
         nm.setMaxLines(1);
         nm.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(nm, new LinearLayout.LayoutParams(-1, -2));
-        TextView nb = txt(ct.number, 12, MUTED(), false);
+        TextView nb = txt(ct.number, 14, MUTED(), false);
         nb.setMaxLines(1);
         nb.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(nb, new LinearLayout.LayoutParams(-1, -2));
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-        final TextView star = txt(ct.starred ? "★" : "☆", 20, ct.starred ? ACCENT() : MUTED(), false);
+        final TextView star = txt(ct.starred ? "★" : "☆", 26, ct.starred ? ACCENT() : MUTED(), false);
         star.setGravity(Gravity.CENTER);
         star.setPadding((int) (10 * s), (int) (6 * s), (int) (10 * s), (int) (6 * s));
         star.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { toggleStar(ct); render(); }
         });
         row.addView(star, new LinearLayout.LayoutParams(-2, -2));
-        TextView cb = txt("📞", 18, ACCENT(), false);
+        TextView cb = txt("📞", 20, Color.WHITE, false);
         cb.setGravity(Gravity.CENTER);
-        cb.setPadding((int) (12 * s), (int) (6 * s), (int) (12 * s), (int) (6 * s));
+        cb.setBackground(rounded(ACCENT(), 22, 0));
+        cb.setPadding((int) (12 * s), (int) (10 * s), (int) (12 * s), (int) (10 * s));
         cb.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { callNumber(ct.number); }
         });
@@ -776,33 +1084,40 @@ public class TelefonoView {
         return row;
     }
 
-    // ---------- TECLADO COMPACTO ----------
+    // ---------- TECLADO AMPLIADO (rediseño) ----------
     private void keypadTab() {
-        // Contenedor centrado de 340dp
-        LinearLayout center = new LinearLayout(host);
-        center.setOrientation(LinearLayout.HORIZONTAL);
-        center.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout col = new LinearLayout(host);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding((int) (10 * s), (int) (6 * s), (int) (10 * s), (int) (16 * s));
-        center.addView(col, new LinearLayout.LayoutParams((int) (340 * s), -2));
-        content.addView(center, new LinearLayout.LayoutParams(-1, -2));
+        col.setPadding((int) (10 * s), (int) (4 * s), (int) (10 * s), (int) (8 * s));
+        content.addView(col, new LinearLayout.LayoutParams(-1, -2));
 
-        dialNumber = txt("", 26, TEXT(), true);
+        // Display grande con botón Borrar bien visible (antes era un texto minúsculo).
+        LinearLayout displayBox = new LinearLayout(host);
+        displayBox.setOrientation(LinearLayout.HORIZONTAL);
+        displayBox.setGravity(Gravity.CENTER_VERTICAL);
+        displayBox.setBackground(rounded(INNER(), 16, 0));
+        displayBox.setPadding((int) (14 * s), (int) (8 * s), (int) (10 * s), (int) (8 * s));
+        dialNumber = txt("", 32, TEXT(), true);
         dialNumber.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams dnp = new LinearLayout.LayoutParams(-1, (int) (44 * s));
-        col.addView(dialNumber, dnp);
-
-        TextView bs = txt("⌫ Borrar", 13, MUTED(), false);
+        dialNumber.setMaxLines(1);
+        dialNumber.setEllipsize(TextUtils.TruncateAt.END);
+        displayBox.addView(dialNumber, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView bs = txt("⌫  Borrar", 17, Color.WHITE, true);
         bs.setGravity(Gravity.CENTER);
-        bs.setPadding(0, (int) (2 * s), 0, (int) (4 * s));
+        bs.setBackground(rounded(0xFFE53935, 14, 0));
+        bs.setPadding((int) (18 * s), (int) (12 * s), (int) (18 * s), (int) (12 * s));
         bs.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { if (dialText.length() > 0) { dialText = dialText.substring(0, dialText.length() - 1); dialNumber.setText(dialText); } }
         });
         bs.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) { dialText = ""; dialNumber.setText(""); return true; }
         });
-        col.addView(bs, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams bslp = new LinearLayout.LayoutParams(-2, -2);
+        bslp.leftMargin = (int) (10 * s);
+        displayBox.addView(bs, bslp);
+        LinearLayout.LayoutParams dbp = new LinearLayout.LayoutParams(-1, -2);
+        dbp.bottomMargin = (int) (10 * s);
+        col.addView(displayBox, dbp);
 
         final String[] digits = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0+", "#"};
         for (int r = 0; r < 4; r++) {
@@ -810,9 +1125,9 @@ public class TelefonoView {
             line.setOrientation(LinearLayout.HORIZONTAL);
             for (int colI = 0; colI < 3; colI++) {
                 final String d = digits[r * 3 + colI];
-                TextView b = txt(d, 22, TEXT(), true);
+                TextView b = txt(d, 28, TEXT(), true);
                 b.setGravity(Gravity.CENTER);
-                b.setBackground(rounded(INNER(), 14, 0));
+                b.setBackground(rounded(INNER(), 16, 0));
                 b.setSoundEffectsEnabled(true);
                 b.setOnTouchListener(new View.OnTouchListener() {
                     public boolean onTouch(View view, android.view.MotionEvent ev) {
@@ -836,23 +1151,23 @@ public class TelefonoView {
                         dialNumber.setText(dialText);
                     }
                 });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, (int) (44 * s), 1f);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, (int) (46 * s), 1f);
                 lp.leftMargin = (int) (4 * s); lp.rightMargin = (int) (4 * s);
-                lp.topMargin = (int) (4 * s); lp.bottomMargin = (int) (4 * s);
+                lp.topMargin = (int) (3 * s); lp.bottomMargin = (int) (3 * s);
                 line.addView(b, lp);
             }
             col.addView(line, new LinearLayout.LayoutParams(-1, -2));
         }
 
-        TextView callBtn = txt("📞  Llamar", 18, Color.WHITE, true);
+        TextView callBtn = txt("📞  Llamar", 22, Color.WHITE, true);
         callBtn.setGravity(Gravity.CENTER);
-        callBtn.setBackground(rounded(0xFF2DBE6C, 16, 0));
+        callBtn.setBackground(rounded(ACCENT(), 18, 0));
         callBtn.setPadding(0, (int) (12 * s), 0, (int) (12 * s));
         callBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { final String n = dialText.trim(); if (n.length() > 0) callNumber(n); }
         });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.topMargin = (int) (10 * s);
+        clp.topMargin = (int) (8 * s);
         col.addView(callBtn, clp);
     }
 
@@ -884,8 +1199,8 @@ public class TelefonoView {
     private void loadContacts() {
         if (!host.phonePermsGranted()) return;
         List<Contact> out = new ArrayList<Contact>();
-        java.util.Map<Long, Boolean> starMap = new HashMap<Long, Boolean>();
-        java.util.Map<Long, Uri> thumbMap = new HashMap<Long, Uri>();
+        Map<Long, Boolean> starMap = new HashMap<Long, Boolean>();
+        Map<Long, Uri> thumbMap = new HashMap<Long, Uri>();
         Cursor cst = null;
         try {
             cst = host.getContentResolver().query(ContactsContract.Contacts.CONTENT_URI,
@@ -900,7 +1215,6 @@ public class TelefonoView {
         } catch (Throwable ignored) { }
         try { if (cst != null) cst.close(); } catch (Throwable ignored) {}
         Cursor c = null;
-        Set<String> favs = prefsFav();
         try {
             c = host.getContentResolver().query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
                     new String[]{
@@ -918,14 +1232,109 @@ public class TelefonoView {
                 try { contactId = c.getLong(3); } catch (Throwable ignored) { }
                 ct.contactId = contactId;
                 ct.photoUri = contactId >= 0 ? thumbMap.get(contactId) : null;
-                Boolean st = contactId >= 0 ? starMap.get(contactId) : null;
-                ct.starred = (st != null && st.booleanValue()) || favs.contains(ct.key);
                 if (ct.name.length() > 0 && ct.number.length() > 0) out.add(ct);
             }
         } catch (Throwable ignored) { }
         try { if (c != null) c.close(); } catch (Throwable ignored) {}
+
         contacts.clear();
         contacts.addAll(out);
+
+        // Favoritos: primero los que ya marcó el usuario. La primera vez se
+        // intenta traer las estrellas del teléfono; si el PBAP no las expone
+        // (iPhone), se usan los números más llamados como aproximación.
+        Set<String> favs = prefsFav();
+        if (!host.getPrefs().getBoolean("phone_fav_imported", false)) {
+            importFavorites(true);
+            favs = prefsFav();
+        }
+        for (Contact ct : out) {
+            Boolean st = ct.contactId >= 0 ? starMap.get(ct.contactId) : null;
+            ct.starred = (st != null && st.booleanValue()) || favs.contains(ct.key);
+        }
+        contacts.clear();
+        contacts.addAll(out);
+    }
+
+    /** Historial real de llamadas del radio (BTSuite / HFP). */
+    static final Uri BT_CALLLOG_URI =
+            Uri.parse("content://com.autochips.bluetooth.calllog/bluetooth_calllog_table");
+
+    /**
+     * Importa favoritos desde el teléfono. Primero intenta las estrellas de la
+     * agenda del sistema; si no hay ninguna (el PBAP del iPhone no expone el
+     * atributo "favorito"), usa los números más llamados del historial HFP.
+     */
+    private int importFavorites(boolean includeTopCalled) {
+        int added = 0;
+        try {
+            Set<String> favs = prefsFav();
+            int before = favs.size();
+            Set<Long> starredIds = new HashSet<Long>();
+            Cursor c = null;
+            try {
+                c = host.getContentResolver().query(ContactsContract.Contacts.CONTENT_URI,
+                        new String[]{ContactsContract.Contacts._ID},
+                        ContactsContract.Contacts.STARRED + "=1", null, null);
+                if (c != null) while (c.moveToNext()) {
+                    try { starredIds.add(c.getLong(0)); } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+            try { if (c != null) c.close(); } catch (Throwable ignored) {}
+            for (Contact ct : contacts) {
+                if (ct.contactId >= 0 && starredIds.contains(ct.contactId)) {
+                    if (favs.add(ct.key)) added++;
+                }
+            }
+            if (includeTopCalled && favs.size() == before) {
+                final Map<String, Integer> freq = readBtCallFreq();
+                List<Contact> ranked = new ArrayList<Contact>(contacts);
+                Collections.sort(ranked, new Comparator<Contact>() {
+                    public int compare(Contact a, Contact b) {
+                        int fa = freqOf(freq, a.number);
+                        int fb = freqOf(freq, b.number);
+                        if (fa != fb) return fb - fa;
+                        return a.name.compareToIgnoreCase(b.name);
+                    }
+                });
+                for (Contact ct : ranked) {
+                    if (added >= 8) break;
+                    if (freqOf(freq, ct.number) <= 0) continue;
+                    if (favs.add(ct.key)) added++;
+                }
+            }
+            if (added > 0) {
+                host.getPrefs().edit()
+                        .putStringSet("phone_fav_ids", favs)
+                        .putBoolean("phone_fav_imported", true).apply();
+                for (Contact ct : contacts) if (favs.contains(ct.key)) ct.starred = true;
+            }
+        } catch (Throwable ignored) {}
+        return added;
+    }
+
+    private static int freqOf(Map<String, Integer> freq, String number) {
+        String n = cleanNumber(number);
+        if (n == null) return 0;
+        Integer v = freq.get(n);
+        return v != null ? v.intValue() : 0;
+    }
+
+    private Map<String, Integer> readBtCallFreq() {
+        Map<String, Integer> freq = new HashMap<String, Integer>();
+        Cursor c = null;
+        try {
+            c = host.getContentResolver().query(BT_CALLLOG_URI,
+                    new String[]{"phone_number"}, null, null, null);
+            if (c != null) while (c.moveToNext()) {
+                String n = cleanNumber(c.getString(0));
+                if (n == null) continue;
+                Integer v = freq.get(n);
+                freq.put(n, v == null ? 1 : v.intValue() + 1);
+            }
+        } catch (Throwable ignored) {}
+        try { if (c != null) c.close(); } catch (Throwable ignored) {}
+        return freq;
     }
 
     private static String safe(String s, String def) { return s != null ? s : def; }
@@ -966,9 +1375,48 @@ public class TelefonoView {
     }
 
     private void loadRecents() {
-        if (!host.phonePermsGranted()) return;
         List<CallRec> out = new ArrayList<CallRec>();
+        Map<String, CallRec> seen = new HashMap<String, CallRec>();
+
+        // 1) Historial real del radio: BTSuite (HeadsetClientService) guarda aquí
+        //    las llamadas entrantes/salientes/perdidas del Bluetooth.
         Cursor c = null;
+        try {
+            c = host.getContentResolver().query(BT_CALLLOG_URI,
+                    new String[]{"phone_number", "display_name", "call_type", "call_time"},
+                    null, null, "call_time DESC");
+            if (c != null) while (c.moveToNext()) {
+                String num = null;
+                try { num = c.getString(0); } catch (Throwable ignored) {}
+                if (num == null || num.trim().length() == 0) continue;
+                CallRec r = new CallRec();
+                r.number = num.trim();
+                String type = null;
+                try { type = c.getString(2); } catch (Throwable ignored) {}
+                r.type = mapBtCallType(type);
+                // El historial Bluetooth no guarda duración: una perdida = 0 y
+                // el resto se considera contestada, así se conserva la lógica
+                // de "Números desconocidos" (no conocidos y no contestados).
+                r.duration = "missed".equalsIgnoreCase(type) ? 0 : 1;
+                String when = null;
+                try { when = c.getString(3); } catch (Throwable ignored) {}
+                r.date = parseBtTime(when);
+                String dn = null;
+                try { dn = c.getString(1); } catch (Throwable ignored) {}
+                r.name = (dn != null && dn.length() > 0 && !"NULL".equalsIgnoreCase(dn)) ? dn : lookupName(r.number);
+                r.known = r.name != null;
+                String key = cleanNumber(r.number) + "|" + (r.date / 60000L);
+                if (!seen.containsKey(key)) {
+                    seen.put(key, r);
+                    out.add(r);
+                }
+                if (out.size() >= 100) break;
+            }
+        } catch (Throwable ignored) {}
+        try { if (c != null) c.close(); } catch (Throwable ignored) {}
+
+        // 2) CallLog estándar (por si el firmware también lo usa).
+        c = null;
         try {
             c = host.getContentResolver().query(CallLog.Calls.CONTENT_URI,
                     new String[]{
@@ -981,20 +1429,52 @@ public class TelefonoView {
             if (c != null) while (c.moveToNext()) {
                 CallRec r = new CallRec();
                 try { r.number = c.getString(0); } catch (Throwable ignored) { r.number = null; }
+                if (r.number == null || r.number.trim().length() == 0) continue;
                 String cached = null;
                 try { cached = c.getString(1); } catch (Throwable ignored) { }
                 try { r.type = c.getInt(2); } catch (Throwable ignored) { r.type = 0; }
                 try { r.date = c.getLong(3); } catch (Throwable ignored) { r.date = 0; }
                 try { r.duration = c.getLong(4); } catch (Throwable ignored) { r.duration = 0; }
-                r.name = cached != null ? cached : lookupName(r.number);
+                r.name = (cached != null && cached.length() > 0) ? cached : lookupName(r.number);
                 r.known = r.name != null;
-                out.add(r);
+                String key = cleanNumber(r.number) + "|" + (r.date / 60000L);
+                if (!seen.containsKey(key)) {
+                    seen.put(key, r);
+                    out.add(r);
+                }
                 if (out.size() >= 100) break;
             }
         } catch (Throwable ignored) { }
         try { if (c != null) c.close(); } catch (Throwable ignored) {}
+
+        Collections.sort(out, new Comparator<CallRec>() {
+            public int compare(CallRec a, CallRec b) {
+                if (a.date == b.date) return 0;
+                return a.date < b.date ? 1 : -1;
+            }
+        });
         calls.clear();
         calls.addAll(out);
+    }
+
+    private static int mapBtCallType(String type) {
+        if (type == null) return CallLog.Calls.MISSED_TYPE;
+        if (type.equalsIgnoreCase("incoming")) return CallLog.Calls.INCOMING_TYPE;
+        if (type.equalsIgnoreCase("outgoing")) return CallLog.Calls.OUTGOING_TYPE;
+        if (type.equalsIgnoreCase("missed")) return CallLog.Calls.MISSED_TYPE;
+        return CallLog.Calls.MISSED_TYPE;
+    }
+
+    private static long parseBtTime(String when) {
+        if (when == null || when.length() < 15) return 0;
+        try {
+            SimpleDateFormat f = new SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.US);
+            f.setLenient(true);
+            Date d = f.parse(when);
+            return d != null ? d.getTime() : 0;
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 
     // ---------- avatar ----------
@@ -1081,5 +1561,7 @@ public class TelefonoView {
 
     public void destroy() {
         try { if (tone != null) tone.release(); } catch (Throwable ignored) {}
+        try { if (themedWindow != null) themedWindow.hide(); } catch (Throwable ignored) {}
+        try { if (hfp != null) hfp.close(); } catch (Throwable ignored) {}
     }
 }

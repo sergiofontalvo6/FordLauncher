@@ -757,7 +757,7 @@ public class DiagnosticoView {
         });
         // Brillo verde + pulso mientras escucha
         if (btn != null) {
-            btn.setBackground(rounded(0xFF2DBE6C, 8, 0));
+            btn.setBackground(rounded(ACCENT(), 8, 0));
             try {
                 android.view.animation.AlphaAnimation anim = new android.view.animation.AlphaAnimation(0.35f, 1f);
                 anim.setDuration(700);
