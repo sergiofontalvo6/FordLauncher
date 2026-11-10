@@ -695,17 +695,11 @@ public class DiagnosticoView {
         return speaker;
     }
 
+    /** Usa siempre TTS local para que la respuesta de voz sea inmediata (sin síntesis en la nube). */
     private void runsAiSpeak(String text) {
         if (text == null) return;
-        if (edgeVoiceName() != null) {
-            EdgeVoiceSpeaker edge = ensureEdgeSpeaker();
-            if (edge != null) {
-                pendingCloudText = text;
-                edge.speak(text);
-                updateAiSpeakLabel();
-                return;
-            }
-        }
+        try { if (edgeSpeaker != null) edgeSpeaker.stop(); } catch (Throwable ignored) {}
+        pendingCloudText = null;
         ensureSpeaker().speak(text);
         updateAiSpeakLabel();
     }
