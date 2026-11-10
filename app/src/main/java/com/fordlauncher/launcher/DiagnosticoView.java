@@ -712,8 +712,15 @@ public class DiagnosticoView {
             updateAiSpeakLabel();
             return;
         }
-        if (lastAiText == null || lastAiText.length() == 0) return;
-        runsAiSpeak(lastAiText);
+        String text = lastAiText;
+        if (text == null || text.trim().length() == 0) {
+            text = "Prueba de voz. Si escuchas este mensaje, el audio funciona.";
+            if (aiStatus != null) {
+                aiStatus.setText("Probando voz local...");
+                aiStatus.setVisibility(View.VISIBLE);
+            }
+        }
+        runsAiSpeak(text);
     }
 
     // ---------- Entrada por micrófono (voz → IA con memoria, texto oculto) ----------
