@@ -52,67 +52,78 @@ public class CarVoiceSpeaker {
         final String clean = clean(rawText);
         if (tts == null) {
             pending = clean;
-            TextToSpeech.OnInitListener init = new TextToSpeech.OnInitListener() {
-                public void onInit(int status) {
-                    if (status == TextToSpeech.SUCCESS) {
-                        try {
-                            int r = tts.setLanguage(new Locale("es", "ES"));
-                            Log.w(TAG, "TTS setLanguage es-ES -> " + r);
-                            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
-                                int r2 = tts.setLanguage(new Locale("es"));
-                                Log.w(TAG, "TTS setLanguage es -> " + r2);
-                                if (r2 == TextToSpeech.LANG_MISSING_DATA || r2 == TextToSpeech.LANG_NOT_SUPPORTED) {
-                                    int r3 = tts.setLanguage(Locale.getDefault());
-                                    Log.w(TAG, "TTS setLanguage default -> " + r3);
-                                }
-                            }
-                        } catch (Throwable t) { Log.w(TAG, "TTS setLanguage error: " + t); }
-                        try {
-                            if (prefVoice != null && android.os.Build.VERSION.SDK_INT >= 21) {
-                                java.util.Set<android.speech.tts.Voice> voices = tts.getVoices();
-                                if (voices != null) for (android.speech.tts.Voice voice : voices) {
-                                    if (prefVoice.equals(voice.getName())) {
-                                        tts.setVoice(voice);
-                                        break;
-                                    }
-                                }
-                            }
-                        } catch (Throwable t) { Log.w(TAG, "TTS setVoice error: " + t); }
-                        try { tts.setSpeechRate(1.0f); } catch (Throwable ignored) {}
-                        try { tts.setPitch(1.0f); } catch (Throwable ignored) {}
-                        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                            public void onStart(String id) { setSpeaking(true); }
-                            public void onDone(String id) { setSpeaking(false); abandon(); }
-                            @Override
-                            public void onError(String id) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz."); }
-                            @Override
-                            public void onError(String id, int errorCode) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz (" + errorCode + ")."); }
-                        });
-                        ready = true;
-                        Log.w(TAG, "TTS ready, engine=" + (tts.getDefaultEngine()));
-                        if (pending != null) { String p = pending; pending = null; doSpeak(p); }
-                    } else {
-                        Log.w(TAG, "TTS init failed, status=" + status);
-                        tts = null;
-                        if (listener != null) listener.onError("No se pudo iniciar la voz (estado " + status + "). Revisa motor TTS en Ajustes.");
-                    }
-                }
-            };
-            try {
-                String eng = (prefEngine != null && prefEngine.length() > 0) ? prefEngine : "com.google.android.tts";
-                tts = new TextToSpeech(ctx, init, eng);
-            } catch (Throwable t) {
-                Log.w(TAG, "TTS constructor with engine failed: " + t);
-                try { tts = new TextToSpeech(ctx, init); } catch (Throwable t2) {
-                    Log.w(TAG, "TTS constructor failed: " + t2);
-                    tts = null;
-                    if (listener != null) listener.onError("No se pudo iniciar la voz en este dispositivo.");
-                }
-            }
+            startInit((prefEngine != null && prefEngine.length() > 0) ? prefEngine : "com.google.android.tts", true);
             return;
         }
         if (!ready) { pending = clean; return; }
         doSpeak(clean);
+    }
+
+    private void startInit(final String engine, final boolean allowFallback) {
+        TextToSpeech.OnInitListener init = new TextToSpeech.OnInitListener() {
+            public void onInit(int status) {
+                if (status == TextToSpeech.SUCCESS && tts != null) {
+                    try {
+                        int r = tts.setLanguage(new Locale("es", "ES"));
+                        Log.w(TAG, "TTS setLanguage es-ES -> " + r + " engine=" + engine);
+                        if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
+                            int r2 = tts.setLanguage(new Locale("es"));
+                            Log.w(TAG, "TTS setLanguage es -> " + r2);
+                            if (r2 == TextToSpeech.LANG_MISSING_DATA || r2 == TextToSpeech.LANG_NOT_SUPPORTED) {
+                                int r3 = tts.setLanguage(Locale.getDefault());
+                                Log.w(TAG, "TTS setLanguage default -> " + r3);
+                            }
+                        }
+                    } catch (Throwable t) { Log.w(TAG, "TTS setLanguage error: " + t); }
+                    try {
+                        if (prefVoice != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                            java.util.Set<android.speech.tts.Voice> voices = tts.getVoices();
+                            if (voices != null) for (android.speech.tts.Voice voice : voices) {
+                                if (prefVoice.equals(voice.getName())) {
+                                    tts.setVoice(voice);
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (Throwable t) { Log.w(TAG, "TTS setVoice error: " + t); }
+                    try { tts.setSpeechRate(1.0f); } catch (Throwable ignored) {}
+                    try { tts.setPitch(1.0f); } catch (Throwable ignored) {}
+                    tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                        public void onStart(String id) { setSpeaking(true); }
+                        public void onDone(String id) { setSpeaking(false); abandon(); }
+                        @Override
+                        public void onError(String id) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz."); }
+                        @Override
+                        public void onError(String id, int errorCode) { setSpeaking(false); abandon(); if (listener != null) listener.onError("Error al reproducir la voz (" + errorCode + ")."); }
+                    });
+                    ready = true;
+                    Log.w(TAG, "TTS ready, engine=" + tts.getDefaultEngine());
+                    if (pending != null) { String p = pending; pending = null; doSpeak(p); }
+                } else {
+                    Log.w(TAG, "TTS init failed, status=" + status + " engine=" + engine);
+                    try { if (tts != null) { tts.shutdown(); } } catch (Throwable ignored) {}
+                    tts = null;
+                    ready = false;
+                    if (allowFallback && engine != null) {
+                        // Reintentar con motor por defecto del sistema.
+                        startInit(null, false);
+                        return;
+                    }
+                    if (listener != null) listener.onError("No se pudo iniciar la voz (estado " + status + "). Revisa motor TTS en Ajustes.");
+                }
+            }
+        };
+        try {
+            tts = (engine != null) ? new TextToSpeech(ctx, init, engine) : new TextToSpeech(ctx, init);
+        } catch (Throwable t) {
+            Log.w(TAG, "TTS constructor failed engine=" + engine + ": " + t);
+            tts = null;
+            if (allowFallback && engine != null) {
+                try { startInit(null, false); } catch (Throwable t2) { if (listener != null) listener.onError("No se pudo iniciar la voz en este dispositivo."); }
+            } else {
+                if (listener != null) listener.onError("No se pudo iniciar la voz en este dispositivo.");
+            }
+        }
     }
 
     /** Habla el texto. Se intenta en un solo bloque para máxima compatibilidad. */
