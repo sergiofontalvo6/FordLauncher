@@ -21,9 +21,9 @@ public class GeminiDiagnosticClient {
     private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
 
-    // Memoria conversacional (multi-turno): contenidos user/model que se acumulan.
+    // Memoria conversacional corta para respuestas más rápidas.
     private static final java.util.List<String> HISTORY = new java.util.ArrayList<String>();
-    private static final int MAX_CONTENTS = 12;
+    private static final int MAX_CONTENTS = 4;
 
     public static void clearHistory() {
         synchronized (HISTORY) { HISTORY.clear(); }
@@ -37,12 +37,8 @@ public class GeminiDiagnosticClient {
 
     private static String contentsJson(String systemText, String userText, boolean detailed) {
         synchronized (HISTORY) {
-            if (HISTORY.isEmpty()) {
-                HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(systemText) + "\"}]}");
-                HISTORY.add("{\"role\":\"model\",\"parts\":[{\"text\":\"Entendido, soy tu copiloto.\"}]}");
-            }
-            HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(userText) + "\"}]}");
-            while (HISTORY.size() > MAX_CONTENTS) HISTORY.remove(2); // conserva el setup inicial
+            HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(systemText + "\n" + userText) + "\"}]}");
+            while (HISTORY.size() > MAX_CONTENTS) HISTORY.remove(0);
             StringBuilder b = new StringBuilder();
             b.append("{\"contents\":[");
             for (int i = 0; i < HISTORY.size(); i++) {
@@ -50,7 +46,7 @@ public class GeminiDiagnosticClient {
                 b.append(HISTORY.get(i));
             }
             b.append("]");
-            b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 900 : 250) + "}}");
+            b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 320 : 140) + ",\"temperature\":0.2}}");
             return b.toString();
         }
     }
@@ -119,18 +115,16 @@ public class GeminiDiagnosticClient {
                     String body = contentsJson(systemPrompt, userText, detailed);
                     final byte[] bytes = body.getBytes("UTF-8");
                     final String reqUrl = url;
-                    // Plazo total: 2 intentos de 20 s (fábrica propia + sistema) en
-                    // Net.postJson. HttpURLConnection en API 27 puede ignorar el
-                    // timeout si DNS/TCP/TLS se cuelga; el Future lo corta igual.
+                    // Plazo reducido para priorizar respuesta rápida en la radio.
                     Future<String> fut = NET.submit(new Callable<String>() {
                         public String call() throws Exception {
-                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, bytes, 20000);
+                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, bytes, 12000);
                             return extractSse(new String(out, "UTF-8"));
                         }
                     });
                     String text;
                     try {
-                        text = fut.get(45000, TimeUnit.MILLISECONDS);
+                        text = fut.get(20000, TimeUnit.MILLISECONDS);
                     } catch (TimeoutException e) {
                         try { fut.cancel(true); } catch (Throwable ignored) {}
                         Log.w("FordLauncher/AI", "Gemini timeout 45s: " + e);
