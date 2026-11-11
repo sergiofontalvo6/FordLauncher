@@ -10,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 
 /** Cliente del diagnostico por IA (Google Gemini 1.5 Flash gratuito). */
 public class GeminiDiagnosticClient {
@@ -21,34 +22,87 @@ public class GeminiDiagnosticClient {
     private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
 
-    // Memoria conversacional corta para respuestas más rápidas.
+    // Memoria conversacional corta: solo turnos user/model (las instrucciones van en systemInstruction).
     private static final java.util.List<String> HISTORY = new java.util.ArrayList<String>();
-    private static final int MAX_CONTENTS = 4;
+    private static final int MAX_TURNS = 8;
+    private static final long SESSION_IDLE_MS = 15 * 60 * 1000L;
+    private static final String PREFIX_VOZ = "El conductor pregunta por voz";
+    private static volatile boolean saludadoEnSesion;
+    private static volatile long ultimaInteraccionMs;
 
     public static void clearHistory() {
         synchronized (HISTORY) { HISTORY.clear(); }
     }
 
-    private static void pushTurn(String role, String text) {
+    /** Reinicia la sesión (memoria y saludo). Llamar al apagar el contacto del auto. */
+    public static void resetSession() {
         synchronized (HISTORY) {
-            HISTORY.add("{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + escape(text) + "\"}]}");
+            HISTORY.clear();
+            saludadoEnSesion = false;
+            ultimaInteraccionMs = 0L;
         }
     }
 
-    private static String contentsJson(String systemText, String userText, boolean detailed) {
+    private static String turn(String role, String text) {
+        return "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + escape(text) + "\"}]}";
+    }
+
+    /** Cuerpo de la petición: systemInstruction + historial + el turno actual del usuario. */
+    private static String bodyJson(String systemText, String userText, boolean conversacion) {
         synchronized (HISTORY) {
-            HISTORY.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" + escape(systemText + "\n" + userText) + "\"}]}");
-            while (HISTORY.size() > MAX_CONTENTS) HISTORY.remove(0);
-            StringBuilder b = new StringBuilder();
-            b.append("{\"contents\":[");
-            for (int i = 0; i < HISTORY.size(); i++) {
-                if (i > 0) b.append(",");
-                b.append(HISTORY.get(i));
+            long ahora = System.currentTimeMillis();
+            if (ultimaInteraccionMs > 0 && ahora - ultimaInteraccionMs > SESSION_IDLE_MS) {
+                HISTORY.clear();
+                saludadoEnSesion = false;
             }
+            StringBuilder b = new StringBuilder();
+            b.append("{\"systemInstruction\":{\"parts\":[{\"text\":\"").append(escape(systemText)).append("\"}]},");
+            b.append("\"contents\":[");
+            for (String t : HISTORY) b.append(t).append(",");
+            b.append(turn("user", userText));
             b.append("]");
-            b.append(",\"generationConfig\":{\"maxOutputTokens\":" + (detailed ? 320 : 140) + ",\"temperature\":0.2}}");
+            b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(conversacion ? 180 : 140)
+             .append(",\"temperature\":0.4}}");
             return b.toString();
         }
+    }
+
+    /** Guarda el par usuario/modelo solo si hubo respuesta; a partir de aquí no se vuelve a saludar. */
+    private static void registrarRespuesta(String userText, String text) {
+        synchronized (HISTORY) {
+            HISTORY.add(turn("user", userText));
+            HISTORY.add(turn("model", text));
+            while (HISTORY.size() > MAX_TURNS) HISTORY.remove(0);
+            saludadoEnSesion = true;
+            ultimaInteraccionMs = System.currentTimeMillis();
+        }
+    }
+
+    private static String systemPrompt(String userName, String carName, boolean primera) {
+        String nombre = userName.length() > 0 ? userName : "amigo";
+        String vehiculo = carName.length() > 0 ? carName : "Ford Fiesta";
+        return "Eres el copiloto inteligente de " + nombre + " a bordo de su " + vehiculo + ". "
+                + "PERSONALIDAD Y ALCANCE: eres un asistente conversacional completo, natural, cercano e inteligente. "
+                + "Puedes hablar de cualquier tema (música, cultura, ciencia, viajes, rutas, tecnología, charla informal). "
+                + "Conoces a fondo la mecánica y la telemetría de este vehículo. Cada mensaje trae datos actuales del auto en JSON "
+                + "(rpm, coolant en grados, speed en km/h, voltage, etc.). Si te preguntan por el auto, sus sensores, fallas o estado, "
+                + "analiza esos datos con precisión técnica; si un dato no viene, dilo sin inventarlo. "
+                + "Si te preguntan de cualquier otra cosa, responde con soltura. "
+                + "SALUDO: " + (primera
+                    ? "esta es la primera interacción de la sesión; puedes saludar brevemente por su nombre al inicio."
+                    : "ya lo saludaste en esta sesión. Está PROHIBIDO volver a decir 'Hola', 'Buenos días' o saludar por su nombre al inicio. Entra directo a responder.")
+                + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; frases cortas para leer en voz alta mientras conduce.";
+    }
+
+    /** Quita un saludo inicial repetido (p. ej. "Hola Sergio, ..."). Si no queda nada, devuelve el original. */
+    static String quitarSaludo(String texto, String userName) {
+        if (texto == null) return null;
+        String t = texto.trim();
+        String nombre = (userName != null && userName.length() > 0)
+                ? "(?:" + Pattern.quote(userName) + ")?" : "";
+        String re = "^(?i)(hola|saludos|buenos días|buenas tardes|buenas noches|buenas)[,!]?\\s*" + nombre + "[.,!]?\\s*";
+        String limpio = t.replaceFirst(re, "");
+        return limpio.trim().length() > 0 ? limpio : t;
     }
 
     static String apiKey(Context c) {
@@ -86,17 +140,15 @@ public class GeminiDiagnosticClient {
         final String snap = jsonSnapshot == null ? "{}" : jsonSnapshot;
         final String userName = userName(ctx);
         final String carName = carName(ctx);
-        final String greet = (userName.length() > 0 || carName.length() > 0)
-                ? " El usuario se llama " + (userName.length() > 0 ? userName : "amigo")
-                + (carName.length() > 0 ? " y su vehículo es un " + carName : "")
-                + ". Salúdalo por su nombre al inicio, dirígete a él como " + (userName.length() > 0 ? userName : "amigo") + " (nunca como 'jefe') y nombra el vehículo cuando hable de él."
-                : " Dirígete al usuario como 'amigo' (nunca como 'jefe').";
+        final boolean conversacion = task != null && task.startsWith(PREFIX_VOZ);
         final String taskText = task != null && task.length() > 0
                 ? task
                 : "Analiza estos datos OBD2 y códigos de falla";
-        final String detailNote = detailed
-                ? " Explica uno por uno en lineas cortas. Mas de 400 palabras si hace falta, sin asteriscos ni vinetas complejas."
-                : " Explica en espanol en exactamente 3 puntos concretos, claros y breves (maximo 65 palabras en total): 1. Diagnostico exacto del problema. 2. Nivel de gravedad (Bajo/Medio/Alto). 3. Que revisar o reparar en el taller. No uses asteriscos, vinetas complejas ni tecnicismos confusos.";
+        final String formato = conversacion
+                ? " Responde de forma natural y directa, en 1 a 3 oraciones."
+                : detailed
+                    ? " Responde breve: máximo 6 líneas, una por sensor o ítem relevante con estado (OK o ANOMALÍA) y causa probable. Sin asteriscos ni viñetas complejas."
+                    : " Responde muy breve (máx 45 palabras) en 3 puntos: 1) diagnóstico, 2) gravedad (Bajo/Medio/Alto), 3) qué revisar. Sin asteriscos ni viñetas.";
         POOL.execute(new Runnable() {
             public void run() {
                 if (key.length() == 0) {
@@ -109,10 +161,10 @@ public class GeminiDiagnosticClient {
                     // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
-                    String systemPrompt = "Eres el copiloto y mecanico automotriz especialista de un Ford Fiesta." + greet
-                            + " Responde de forma natural, concisa y directa para ser leída al conductor en voz alta. Sin asteriscos ni viñetas complejas.";
-                    String userText = taskText + ": " + snap + ". " + detailNote;
-                    String body = contentsJson(systemPrompt, userText, detailed);
+                    final boolean primera = !saludadoEnSesion;
+                    String systemPrompt = systemPrompt(userName, carName, primera);
+                    String userText = taskText + ": " + snap + "." + formato;
+                    String body = bodyJson(systemPrompt, userText, conversacion);
                     final byte[] bytes = body.getBytes("UTF-8");
                     final String reqUrl = url;
                     // Plazo reducido para priorizar respuesta rápida en la radio.
@@ -144,8 +196,9 @@ public class GeminiDiagnosticClient {
                         return;
                     }
                     Log.i("FordLauncher/AI", "Gemini OK (" + text.length() + " chars)");
-                    pushTurn("model", text);
-                    if (callback != null) callback.onDone(text, null);
+                    String limpio = primera ? text.trim() : quitarSaludo(text, userName);
+                    registrarRespuesta(userText, limpio);
+                    if (callback != null) callback.onDone(limpio, null);
                 } catch (Throwable e) {
                     if (callback != null) callback.onDone(null, ERR_CONN);
                 }
