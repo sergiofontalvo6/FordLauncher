@@ -51,6 +51,9 @@ public class ObdRepository {
     public void setListener(Listener l) { listener = l; }
 
     public State getState() { return state; }
+
+    /** Verdadero solo con adaptador enlazado (o modo demo) y sin error de E/S. */
+    public boolean isConnected() { return state == State.ON && (demo || elm != null); }
     public String getError() { return error; }
     public String getAdapter() { return adapter; }
     public Set<Integer> getSupported() { return new HashSet<Integer>(supported); }
@@ -204,7 +207,14 @@ public class ObdRepository {
                 Thread.sleep(60);
             }
         } catch (Exception e) {
-            if (running) setState(State.ERROR, e.getMessage());
+            if (running) {
+                synchronized(lock) {
+                    try { if (link != null) link.close(); } catch (Throwable ignored) {}
+                    link = null; elm = null;
+                }
+                running = false;
+                setState(State.ERROR, e.getMessage() != null ? e.getMessage() : "Se perdió la conexión con el adaptador");
+            }
         }
     }
 

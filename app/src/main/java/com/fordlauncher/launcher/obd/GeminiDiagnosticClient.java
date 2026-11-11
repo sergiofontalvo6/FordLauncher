@@ -78,7 +78,7 @@ public class GeminiDiagnosticClient {
         }
     }
 
-    private static String systemPrompt(String userName, String carName, boolean primera) {
+    private static String systemPrompt(String userName, String carName, boolean primera, boolean obdConectado) {
         String nombre = userName.length() > 0 ? userName : "amigo";
         String vehiculo = carName.length() > 0 ? carName : "Ford Fiesta";
         return "Eres el copiloto inteligente de " + nombre + " a bordo de su " + vehiculo + ". "
@@ -88,6 +88,11 @@ public class GeminiDiagnosticClient {
                 + "(rpm, coolant en grados, speed en km/h, voltage, etc.). Si te preguntan por el auto, sus sensores, fallas o estado, "
                 + "analiza esos datos con precisión técnica; si un dato no viene, dilo sin inventarlo. "
                 + "Si te preguntan de cualquier otra cosa, responde con soltura. "
+                + "ESTADO DEL ESCÁNER OBD2: " + (obdConectado ? "CONECTADO" : "DESCONECTADO") + ". "
+                + "REGLA CRÍTICA DE VEHÍCULO: si te preguntan por el estado mecánico, fallas o sensores del vehículo y el escáner está "
+                + "DESCONECTADO, NO inventes datos: dile directamente que el escáner OBD2 está desconectado y pídele que lo conecte "
+                + "para poder diagnosticarlo. Si la conversación es de cultura, música, dudas generales o charla informal, responde "
+                + "normalmente sin importar el estado del escáner. "
                 + "SALUDO: " + (primera
                     ? "esta es la primera interacción de la sesión; puedes saludar brevemente por su nombre al inicio."
                     : "ya lo saludaste en esta sesión. Está PROHIBIDO volver a decir 'Hola', 'Buenos días' o saludar por su nombre al inicio. Entra directo a responder.")
@@ -141,6 +146,7 @@ public class GeminiDiagnosticClient {
         final String userName = userName(ctx);
         final String carName = carName(ctx);
         final boolean conversacion = task != null && task.startsWith(PREFIX_VOZ);
+        final boolean obdConectado = snap.contains("\"obd_conectado\":true");
         final String taskText = task != null && task.length() > 0
                 ? task
                 : "Analiza estos datos OBD2 y códigos de falla";
@@ -162,7 +168,7 @@ public class GeminiDiagnosticClient {
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
                     final boolean primera = !saludadoEnSesion;
-                    String systemPrompt = systemPrompt(userName, carName, primera);
+                    String systemPrompt = systemPrompt(userName, carName, primera, obdConectado);
                     String userText = taskText + ": " + snap + "." + formato;
                     String body = bodyJson(systemPrompt, userText, conversacion);
                     final byte[] bytes = body.getBytes("UTF-8");

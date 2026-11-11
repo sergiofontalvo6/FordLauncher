@@ -897,6 +897,16 @@ public class Main extends Activity {
 
     private void fabAskAi(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) { stopFabPulse(); return; }
+        // Validación local: si pregunta por el vehículo y el escáner está desconectado, no se consulta a Gemini.
+        boolean conectado = false;
+        try { conectado = getObdRepo() != null && getObdRepo().isConnected(); } catch (Throwable ignored) {}
+        if (com.fordlauncher.launcher.obd.VehicleIntent.requiereVehiculo(pregunta) && !conectado) {
+            final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
+            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(aviso);
+            stopFabPulse();
+            showFabTextBubble(aviso);
+            return;
+        }
         final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
         String snap = fabSnapshot();
         toast("Consultando…");
@@ -932,21 +942,21 @@ public class Main extends Activity {
     private String fabSnapshot() {
         try {
             StringBuilder sb = new StringBuilder("{");
+            boolean conectado = false;
+            try { conectado = getObdRepo() != null && getObdRepo().isConnected(); } catch (Throwable ignored) {}
+            sb.append("\"obd_conectado\":").append(conectado);
             java.util.Map<String, Float> v = getObdRepo() != null ? getObdRepo().getValues() : null;
             if (v != null) {
-                boolean f = true;
                 String[] keys = {com.fordlauncher.launcher.obd.Pids.RPM, com.fordlauncher.launcher.obd.Pids.COOLANT, com.fordlauncher.launcher.obd.Pids.SPEED, com.fordlauncher.launcher.obd.Pids.FUEL_RATE, com.fordlauncher.launcher.obd.Pids.VOLTAGE, com.fordlauncher.launcher.obd.Pids.FUEL};
                 for (String k : keys) {
                     Float x = v.get(k);
                     if (x == null) continue;
-                    if (!f) sb.append(",");
-                    f = false;
-                    sb.append("\"").append(k).append("\":").append(x.floatValue());
+                    sb.append(",\"").append(k).append("\":").append(x.floatValue());
                 }
             }
             sb.append("}");
             return sb.toString();
-        } catch (Throwable t) { return "{}"; }
+        } catch (Throwable t) { return "{\"obd_conectado\":false}"; }
     }
 
     /** Burbuja pequeña con la respuesta de la IA: texto oculto + botón "👁 Mostrar texto". */

@@ -28,6 +28,7 @@ import com.fordlauncher.launcher.obd.Health;
 import com.fordlauncher.launcher.obd.ObdRepository;
 import com.fordlauncher.launcher.obd.Pids;
 import com.fordlauncher.launcher.obd.TripLog;
+import com.fordlauncher.launcher.obd.VehicleIntent;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -800,6 +801,19 @@ public class DiagnosticoView {
     private void micQuestion(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) return;
         if (voiceInput != null) { /* libera el recognizer tras cada consulta */ }
+        // Validación local: consulta del vehículo con escáner desconectado no gasta tokens.
+        boolean conectado = false;
+        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
+        if (VehicleIntent.requiereVehiculo(pregunta) && !conectado) {
+            final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
+            lastAiText = aviso;
+            if (aiStatus != null) { aiStatus.setText("Escáner OBD2 desconectado"); aiStatus.setVisibility(View.VISIBLE); }
+            if (aiResult != null) { aiResult.setText(aviso); aiResult.setVisibility(View.VISIBLE); }
+            if (aiTextToggle != null) aiTextToggle.setVisibility(View.GONE);
+            updateAiSpeakLabel();
+            TextToSpeechManager.getInstance(host).hablarTextoLargo(aviso);
+            return;
+        }
         final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
         String snap = buildSnapshotJson();
         setAiBusy(true);
@@ -890,7 +904,9 @@ public class DiagnosticoView {
         if (v == null) v = new LinkedHashMap<String, Float>();
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"sensores\":{");
+        boolean conectado = false;
+        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
+        sb.append("\"obd_conectado\":").append(conectado).append(",\"sensores\":{");
         boolean first = true;
         for (int i = 0; i < SENSOR_16.length; i++) {
             Float f = v.get(SENSOR_16[i]);
@@ -912,7 +928,9 @@ public class DiagnosticoView {
         if (v == null) v = new LinkedHashMap<String, Float>();
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"grafica\":{");
+        boolean conectado = false;
+        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
+        sb.append("\"obd_conectado\":").append(conectado).append(",\"grafica\":{");
         boolean first = true;
         for (String sig : chosen.isEmpty() ? readableSignals() : chosen) {
             java.util.List<Float> pts = repo.getHistory(sig);
@@ -948,7 +966,9 @@ public class DiagnosticoView {
         if (v == null) v = new LinkedHashMap<String, Float>();
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"dtc_stored\":"); appendCodeArray(sb, r != null ? r.stored : null);
+        boolean conectado = false;
+        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
+        sb.append("\"obd_conectado\":").append(conectado).append(",\"dtc_stored\":"); appendCodeArray(sb, r != null ? r.stored : null);
         sb.append(",\"dtc_pending\":"); appendCodeArray(sb, r != null ? r.pending : null);
         sb.append(",\"dtc_permanent\":"); appendCodeArray(sb, r != null ? r.permanent : null);
         sb.append(",\"mil\":"); sb.append(r != null && r.readiness != null && r.readiness.mil ? "true" : "false");
