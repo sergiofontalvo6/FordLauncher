@@ -1,6 +1,7 @@
 package com.fordlauncher.launcher.ai;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -12,6 +13,7 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
 import android.util.Log;
+import com.fordlauncher.launcher.obd.EdgeVoiceSpeaker;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -19,7 +21,12 @@ import java.util.Locale;
 import java.util.Queue;
 import java.util.Set;
 
-/** Lectura en voz alta local (sin red) para los diagnósticos de IA. */
+/**
+ * Lectura en voz alta de los diagnósticos de IA.
+ * - Voz "Nube · ..." elegida en Ajustes (tts_voice = "edge:<nombre>"): se sintetiza en la nube con
+ *   EdgeVoiceSpeaker; si falla, se usa el motor local.
+ * - Cualquier otra selección: motor TTS del sistema, sin red.
+ */
 public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     public interface Listener {
@@ -28,11 +35,17 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     }
 
     private static final String TAG = "FordLauncher/TTS";
+    private static final String PREFS = "launcher";
+    private static final String KEY_VOICE = "tts_voice";
+    private static final String EDGE_PREFIX = "edge:";
     private static final String LAST_CHUNK = "last_chunk_";
     private static final long INIT_TIMEOUT_MS = 8000L;
+    private static final float PITCH_LOCAL = 0.85f;
+    private static final float RATE_LOCAL = 0.98f;
     private static TextToSpeechManager instance;
 
     private final Context context;
+    private final SharedPreferences prefs;
     private final AudioManager audioManager;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Queue<String> pendingQueue = new LinkedList<String>();
@@ -40,13 +53,17 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private AudioFocusRequest focusRequest;
     private Listener listener;
     private Runnable initTimeout;
+    private EdgeVoiceSpeaker edge;
+    private String edgeVoice;
     private volatile String ultimoId;
+    private volatile String ultimoTextoNube;
     private volatile boolean isInitialized;
     private volatile boolean initializing;
     private volatile boolean speaking;
 
     private TextToSpeechManager(Context context) {
         this.context = context.getApplicationContext();
+        this.prefs = this.context.getSharedPreferences(PREFS, 0);
         this.audioManager = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
         inicializarMotor();
     }
@@ -59,6 +76,19 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     public void setListener(Listener l) { listener = l; }
 
     public boolean isSpeaking() { return speaking; }
+
+    /** Relee la voz de Ajustes; llamar tras elegir otra voz. */
+    public synchronized void reiniciarVoz() {
+        detener();
+        if (edge != null) {
+            try { edge.shutdown(); } catch (Throwable ignored) {}
+        }
+        edge = null;
+        edgeVoice = null;
+        initializing = false;
+        liberarMotor();
+        inicializarMotor();
+    }
 
     private synchronized void inicializarMotor() {
         if (initializing) return;
@@ -87,7 +117,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         cancelarTimeout();
         initializing = false;
         if (status == TextToSpeech.SUCCESS && tts != null) {
-            configurarIdiomaYVozOffline();
+            configurarVozSegunPreferencias();
             configurarListener();
             isInitialized = true;
             Log.i(TAG, "Motor listo: " + tts.getDefaultEngine());
@@ -100,35 +130,66 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         }
     }
 
-    private void configurarIdiomaYVozOffline() {
-        int res = tts.setLanguage(new Locale("es", "ES"));
-        if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-            res = tts.setLanguage(new Locale("es"));
+    /** Voz local elegida en Ajustes (null si es nube o automática). */
+    private String vozLocalPreferida() {
+        String v = prefs.getString(KEY_VOICE, null);
+        if (v == null || v.trim().length() == 0 || v.startsWith(EDGE_PREFIX)) return null;
+        return v;
+    }
+
+    /** Nombre corto de la voz de nube (p. ej. es-MX-JorgeNeural) o null. */
+    private String vozNubePreferida() {
+        String v = prefs.getString(KEY_VOICE, null);
+        if (v != null && v.startsWith(EDGE_PREFIX) && v.length() > EDGE_PREFIX.length()) {
+            return v.substring(EDGE_PREFIX.length());
         }
-        Log.i(TAG, "Idioma es -> " + res);
+        return null;
+    }
+
+    private void configurarVozSegunPreferencias() {
+        String preferida = vozLocalPreferida();
+        boolean asignada = false;
         if (Build.VERSION.SDK_INT >= 21) {
             try {
                 Set<Voice> voces = tts.getVoices();
-                Voice elegida = null;
-                if (voces != null) {
-                    for (Voice v : voces) {
-                        if (!"es".equals(v.getLocale().getLanguage())) continue;
-                        if (v.isNetworkConnectionRequired()) continue;
-                        if (elegida == null || v.getQuality() > elegida.getQuality()) elegida = v;
+                if (voces != null && !voces.isEmpty()) {
+                    if (preferida != null) {
+                        for (Voice v : voces) {
+                            if (v.getName().equalsIgnoreCase(preferida)) {
+                                tts.setVoice(v);
+                                asignada = true;
+                                Log.i(TAG, "Voz local preferida: " + v.getName());
+                                break;
+                            }
+                        }
+                    }
+                    if (!asignada) {
+                        for (Voice v : voces) {
+                            Locale loc = v.getLocale();
+                            if (loc == null || !"es".equals(loc.getLanguage())) continue;
+                            String n = v.getName().toLowerCase(Locale.ROOT);
+                            if (n.contains("male") || n.contains("jorge") || n.contains("carlos")
+                                    || n.contains("-b-") || n.contains("-d-")) {
+                                tts.setVoice(v);
+                                asignada = true;
+                                Log.i(TAG, "Voz masculina en español: " + v.getName());
+                                break;
+                            }
+                        }
                     }
                 }
-                if (elegida != null) {
-                    tts.setVoice(elegida);
-                    Log.i(TAG, "Voz offline seleccionada: " + elegida.getName());
-                } else {
-                    Log.w(TAG, "No hay voz española offline instalada en el motor");
-                }
             } catch (Exception e) {
-                Log.w(TAG, "No se pudieron listar las voces: " + e);
+                Log.w(TAG, "No se pudo consultar el catálogo de voces: " + e);
             }
         }
-        tts.setPitch(1.0f);
-        tts.setSpeechRate(1.05f);
+        if (!asignada) {
+            int r = tts.setLanguage(new Locale("es", "MX"));
+            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
+                tts.setLanguage(new Locale("es", "ES"));
+            }
+        }
+        tts.setPitch(PITCH_LOCAL);
+        tts.setSpeechRate(RATE_LOCAL);
     }
 
     private void configurarListener() {
@@ -152,18 +213,49 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     public synchronized void hablarTextoLargo(String textoCompleto) {
         if (textoCompleto == null || textoCompleto.trim().isEmpty()) return;
+        String limpio = limpiar(textoCompleto);
+        if (limpio.isEmpty()) return;
+        String nube = vozNubePreferida();
+        if (nube != null && hablarNube(nube, limpio)) return;
+        hablarLocal(limpio);
+    }
 
+    private boolean hablarNube(String nombreVoz, String texto) {
+        try {
+            if (edge == null || !nombreVoz.equals(edgeVoice)) {
+                if (edge != null) edge.shutdown();
+                edgeVoice = nombreVoz;
+                edge = new EdgeVoiceSpeaker(context, nombreVoz);
+                edge.setListener(new EdgeVoiceSpeaker.Listener() {
+                    public void onSpeaking(boolean s) { setSpeaking(s); }
+                    public void onError(final String msg) {
+                        main.post(new Runnable() {
+                            public void run() {
+                                Log.w(TAG, "Voz de nube falló, usando motor local: " + msg);
+                                String t = ultimoTextoNube;
+                                if (t != null) hablarLocal(t);
+                            }
+                        });
+                    }
+                });
+            }
+            ultimoTextoNube = texto;
+            edge.speak(texto);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo iniciar la voz de nube: " + t);
+            return false;
+        }
+    }
+
+    private void hablarLocal(String limpio) {
         if (!isInitialized) {
             pendingQueue.clear();
-            pendingQueue.add(textoCompleto);
+            pendingQueue.add(limpio);
             setSpeaking(true);
             inicializarMotor();
             return;
         }
-
-        String limpio = textoCompleto.replaceAll("[*#_~`>\\[\\]()]", " ")
-                                     .replaceAll("\\s+", " ")
-                                     .trim();
         List<String> fragmentos = new ArrayList<String>();
         for (String parte : limpio.split("(?<=[.!?])\\s+")) {
             String t = parte.trim();
@@ -195,8 +287,17 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     public synchronized void detener() {
         pendingQueue.clear();
+        if (edge != null) {
+            try { edge.stop(); } catch (Throwable ignored) {}
+        }
         try { if (tts != null) tts.stop(); } catch (Throwable ignored) {}
         terminar(null);
+    }
+
+    private static String limpiar(String texto) {
+        return texto.replaceAll("[*#_~`>\\[\\]()]", " ")
+                    .replaceAll("\\s+", " ")
+                    .trim();
     }
 
     private void fallo(String msg) {

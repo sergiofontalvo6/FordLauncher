@@ -42,6 +42,8 @@ public class EdgeVoiceSpeaker {
     }
 
     private static final String TAG = "FordLauncher/VozNube";
+    /** Tono más grave para voz masculina gruesa (0 = original). */
+    private static final String PITCH_HZ = "-8Hz";
     private static final String HOST = "speech.platform.bing.com";
     private static final String TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
     private static final String VERSION = "2-143.0.3650.75";
@@ -248,7 +250,7 @@ public class EdgeVoiceSpeaker {
                 + "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
         String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
                 + "<voice name='" + displayVoiceName(voiceName) + "'>"
-                + "<prosody pitch='+0Hz' rate='+0%' volume='+0%'>"
+                + "<prosody pitch='" + PITCH_HZ + "' rate='+0%' volume='+0%'>"
                 + xmlEscape(text)
                 + "</prosody></voice></speak>";
         String reqId = uuidHex();

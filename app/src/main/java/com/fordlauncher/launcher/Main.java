@@ -3276,6 +3276,10 @@ public class Main extends Activity {
                     if (chosen == null) prefs.edit().remove("tts_voice").apply();
                     else prefs.edit().putString("tts_voice", chosen).apply();
                     finishTts();
+                    com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+                    tm.reiniciarVoz();
+                    String nombre = prefs.getString("user_name", "").trim();
+                    tm.hablarTextoLargo("Hola " + (nombre.length() > 0 ? nombre : "amigo") + ", esta es mi voz actual.");
                     showSettings(8);
                 }
             })
