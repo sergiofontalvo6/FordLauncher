@@ -109,6 +109,7 @@ public class DiagnosticoView {
     private static final String AI_TASK_DEFAULT = "Analiza rápido estos datos OBD2 y códigos de falla";
     private static final String AI_TASK_SENSORS = "Resume rápido los sensores: solo anómalos (o 'Todo normal'), valor vs ref. Máx 6 líneas.";
     private static final String AI_TASK_CHARTS = "Resume rápido la gráfica: tendencia por sensor y ANOMALÍA vs ref si aplica. Máx 6 líneas.";
+    private TextToSpeechManager.Listener ttsListener;
     private CarVoiceSpeaker speaker;
     private EdgeVoiceSpeaker edgeSpeaker;
     private String edgeSpeakerVoice;
@@ -210,7 +211,7 @@ public class DiagnosticoView {
         sc.addView(content, new android.widget.FrameLayout.LayoutParams(-1, -2));
         root.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        TextToSpeechManager.getInstance(host).setListener(new TextToSpeechManager.Listener(){
+        ttsListener = new TextToSpeechManager.Listener(){
             public void onSpeakingChanged(final boolean speaking) { ui.post(new Runnable(){ public void run(){
                 updateAiSpeakLabel();
                 if (aiStatus == null || aiBusy) return;
@@ -221,7 +222,8 @@ public class DiagnosticoView {
                 updateAiSpeakLabel();
                 if (aiStatus != null) { aiStatus.setText(msg); aiStatus.setVisibility(View.VISIBLE); }
             } }); }
-        });
+        };
+        TextToSpeechManager.getInstance(host).addListener(ttsListener);
         repo.setListener(new ObdRepository.Listener(){
             public void onState(ObdRepository.State st, String err) {
                 ui.post(new Runnable(){ public void run(){ render(); } });
@@ -997,6 +999,8 @@ public class DiagnosticoView {
     }
 
     public void onDestroy() {
+        try { if (ttsListener != null) TextToSpeechManager.getInstance(host).removeListener(ttsListener); } catch (Throwable ignored) {}
+        ttsListener = null;
         try { if (speaker != null) speaker.shutdown(); } catch (Throwable ignored) {}
         speaker = null;
         try { if (edgeSpeaker != null) edgeSpeaker.shutdown(); } catch (Throwable ignored) {}

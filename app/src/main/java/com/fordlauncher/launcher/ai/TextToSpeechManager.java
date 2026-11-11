@@ -51,7 +51,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private final Queue<String> pendingQueue = new LinkedList<String>();
     private TextToSpeech tts;
     private AudioFocusRequest focusRequest;
-    private Listener listener;
+    private final java.util.concurrent.CopyOnWriteArrayList<Listener> listeners =
+            new java.util.concurrent.CopyOnWriteArrayList<Listener>();
     private Runnable initTimeout;
     private EdgeVoiceSpeaker edge;
     private String edgeVoice;
@@ -73,7 +74,9 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         return instance;
     }
 
-    public void setListener(Listener l) { listener = l; }
+    public void addListener(Listener l) { if (l != null && !listeners.contains(l)) listeners.add(l); }
+
+    public void removeListener(Listener l) { listeners.remove(l); }
 
     public boolean isSpeaking() { return speaking; }
 
@@ -329,13 +332,13 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         if (speaking == s) return;
         speaking = s;
         main.post(new Runnable() {
-            public void run() { if (listener != null) listener.onSpeakingChanged(s); }
+            public void run() { for (Listener l : listeners) l.onSpeakingChanged(s); }
         });
     }
 
     private void notificarError(final String msg) {
         main.post(new Runnable() {
-            public void run() { if (listener != null) listener.onError(msg); }
+            public void run() { for (Listener l : listeners) l.onError(msg); }
         });
     }
 

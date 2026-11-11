@@ -731,26 +731,76 @@ public class Main extends Activity {
 
     // ─────────────────── Botón flotante del copiloto IA (arrastrable) ───────────────────
 
-    private TextView fabAi;
-    private android.animation.ObjectAnimator fabPulse;
+    private FrameLayout fabAi;
+    private com.fordlauncher.launcher.ai.AiFabAnimator fabAnim;
     private com.fordlauncher.launcher.obd.VoiceInputManager fabVoice;
-    private com.fordlauncher.launcher.obd.CarVoiceSpeaker fabSpeaker;
+    private boolean fabSpeechListening;
     private boolean fabMicPending;
 
     private void buildFloatingAi() {
-        fabAi = new TextView(this);
-        fabAi.setText("🎙");
-        fabAi.setTextColor(Color.WHITE);
-        fabAi.setTextSize(24);
-        fabAi.setGravity(Gravity.CENTER);
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setColor(0xFF00C853);
-        fabAi.setBackground(g);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (54 * s), (int) (54 * s));
+        int box = (int) (74 * s);
+        int core = (int) (54 * s);
+        int spark = (int) (30 * s);
+        fabAi = new FrameLayout(this);
+
+        View glow = new View(this);
+        GradientDrawable halo = new GradientDrawable();
+        halo.setShape(GradientDrawable.OVAL);
+        halo.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        halo.setGradientRadius(box / 2f);
+        halo.setColors(new int[]{0xB34285F4, 0x009B51E0});
+        glow.setBackground(halo);
+        fabAi.addView(glow, new FrameLayout.LayoutParams(box, box));
+
+        View wave = new View(this);
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setStroke((int) (2 * s), 0xFF9B51E0);
+        wave.setBackground(ring);
+        wave.setAlpha(0f);
+        wave.setVisibility(View.INVISIBLE);
+        fabAi.addView(wave, new FrameLayout.LayoutParams(core, core, Gravity.CENTER));
+
+        FrameLayout coreView = new FrameLayout(this);
+        coreView.setBackground(getDrawableOrNull("bg_floating_ai"));
+        if (coreView.getBackground() == null) {
+            GradientDrawable fallback = new GradientDrawable();
+            fallback.setShape(GradientDrawable.OVAL);
+            fallback.setColor(0xF21A1C1E);
+            coreView.setBackground(fallback);
+        }
+        fabAi.addView(coreView, new FrameLayout.LayoutParams(core, core, Gravity.CENTER));
+
+        ImageView sparkle = new ImageView(this);
+        sparkle.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        Drawable sparkleDrawable = getDrawableOrNull("ic_gemini_sparkle");
+        if (sparkleDrawable != null) {
+            sparkle.setImageDrawable(sparkleDrawable);
+        } else {
+            GradientDrawable dot = new GradientDrawable();
+            dot.setShape(GradientDrawable.OVAL);
+            dot.setColor(0xFF4285F4);
+            sparkle.setImageDrawable(dot);
+        }
+        coreView.addView(sparkle, new FrameLayout.LayoutParams(spark, spark, Gravity.CENTER));
+
+        fabAnim = new com.fordlauncher.launcher.ai.AiFabAnimator(fabAi, glow, wave, sparkle);
+        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).addListener(
+            new com.fordlauncher.launcher.ai.TextToSpeechManager.Listener() {
+                public void onSpeakingChanged(boolean speaking) {
+                    if (fabAnim == null) return;
+                    if (speaking) fabAnim.speaking();
+                    else if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING) fabAnim.idle();
+                }
+                public void onError(String msg) {
+                    if (fabAnim != null && fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING) fabAnim.idle();
+                }
+            });
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(box, box);
         lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        lp.rightMargin = (int) (16 * s);
-        lp.bottomMargin = (int) (72 * s);
+        lp.rightMargin = (int) (6 * s);
+        lp.bottomMargin = (int) (62 * s);
         root.addView(fabAi, lp);
         fabAi.setOnTouchListener(new View.OnTouchListener() {
             private float iX, iY, tX, tY;
@@ -787,6 +837,10 @@ public class Main extends Activity {
         boolean en = true;
         try { en = prefs.getBoolean("pref_enable_floating_ai_button", true); } catch (Throwable ignored) {}
         fabAi.setVisibility(en ? View.VISIBLE : View.GONE);
+        if (fabAnim != null) {
+            if (!en) fabAnim.stop();
+            else if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
+        }
         if (en) {
             float x = -1f, y = -1f;
             try { x = prefs.getFloat("ai_fab_x", -1f); y = prefs.getFloat("ai_fab_y", -1f); } catch (Throwable ignored) {}
@@ -824,6 +878,9 @@ public class Main extends Activity {
 
     private void startFabListening() {
         if (fabVoice == null) fabVoice = new com.fordlauncher.launcher.obd.VoiceInputManager(this);
+        fabVoice.setOnBeginningOfSpeech(new Runnable() {
+            public void run() { if (fabAnim != null) fabAnim.listening(); }
+        });
         fabVoice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
             public void onQueryReady(String text) { fabAskAi(text); }
             public void onError(String msg) {
@@ -831,18 +888,11 @@ public class Main extends Activity {
                 toast(msg);
             }
         });
-        if (fabAi != null) {
-            fabPulse = android.animation.ObjectAnimator.ofFloat(fabAi, "scaleX", 1f, 1.15f, 1f);
-            fabPulse.setDuration(800);
-            fabPulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-            fabPulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            fabPulse.start();
-        }
+        if (fabAnim != null) fabAnim.waiting();
     }
 
     private void stopFabPulse() {
-        try { if (fabPulse != null) { fabPulse.cancel(); fabPulse = null; } } catch (Throwable ignored) {}
-        if (fabAi != null) { try { fabAi.setScaleX(1f); fabAi.setScaleY(1f); } catch (Throwable ignored) {} }
+        if (fabAnim != null && fabAnim.state() != com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
     }
 
     private void fabAskAi(final String pregunta) {
@@ -850,23 +900,33 @@ public class Main extends Activity {
         final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
         String snap = fabSnapshot();
         toast("Consultando…");
+        if (fabAnim != null) fabAnim.waiting();
         com.fordlauncher.launcher.obd.GeminiDiagnosticClient.analyze(this, snap, task, false, new com.fordlauncher.launcher.obd.GeminiDiagnosticClient.Callback() {
             public void onDone(final String text, final String error) {
                 h.post(new Runnable() {
                     public void run() {
-                        stopFabPulse();
                         if (error != null || text == null) {
+                            stopFabPulse();
                             toast(error != null ? error : "Sin respuesta de la IA");
                             return;
                         }
-                        if (fabSpeaker == null) fabSpeaker = new com.fordlauncher.launcher.obd.CarVoiceSpeaker(Main.this);
-                        try { fabSpeaker.speak(text); } catch (Throwable ignored) {}
+                        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(text);
+                        if (fabAnim != null && fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.WAITING) fabAnim.idle();
                         showFabTextBubble(text);
                         refreshFloatingAi();
                     }
                 });
             }
         });
+    }
+
+    private Drawable getDrawableOrNull(String name) {
+        try {
+            int id = getResources().getIdentifier(name, "drawable", getPackageName());
+            return id == 0 ? null : getResources().getDrawable(id);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private String fabSnapshot() {

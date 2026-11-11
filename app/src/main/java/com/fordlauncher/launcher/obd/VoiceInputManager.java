@@ -19,8 +19,12 @@ public class VoiceInputManager {
 
     private SpeechRecognizer recognizer;
     private final Context ctx;
+    private Runnable onBeginning;
 
     public VoiceInputManager(Context c) { ctx = c.getApplicationContext(); }
+
+    /** Se llama cuando el reconocedor detecta el inicio de la voz del usuario. */
+    public void setOnBeginningOfSpeech(Runnable r) { onBeginning = r; }
 
     public boolean isAvailable() {
         try { return SpeechRecognizer.isRecognitionAvailable(ctx); } catch (Throwable t) { return false; }
@@ -46,7 +50,7 @@ public class VoiceInputManager {
         final VoiceCallback cb = callback;
         RecognitionListener rl = new RecognitionListener() {
             public void onReadyForSpeech(Bundle params) { }
-            public void onBeginningOfSpeech() { }
+            public void onBeginningOfSpeech() { if (onBeginning != null) onBeginning.run(); }
             public void onRmsChanged(float rmsdB) { }
             public void onBufferReceived(byte[] buffer) { }
             public void onEndOfSpeech() { }
