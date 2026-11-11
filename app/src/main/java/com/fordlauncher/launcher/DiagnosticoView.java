@@ -18,6 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
+import com.fordlauncher.launcher.ai.TextToSpeechManager;
 import com.fordlauncher.launcher.obd.CarVoiceSpeaker;
 import com.fordlauncher.launcher.obd.Codes;
 import com.fordlauncher.launcher.obd.Derived;
@@ -209,6 +210,18 @@ public class DiagnosticoView {
         sc.addView(content, new android.widget.FrameLayout.LayoutParams(-1, -2));
         root.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        TextToSpeechManager.getInstance(host).setListener(new TextToSpeechManager.Listener(){
+            public void onSpeakingChanged(final boolean speaking) { ui.post(new Runnable(){ public void run(){
+                updateAiSpeakLabel();
+                if (aiStatus == null || aiBusy) return;
+                aiStatus.setText(speaking ? "Reproduciendo voz..." : "");
+                aiStatus.setVisibility(speaking ? View.VISIBLE : View.GONE);
+            } }); }
+            public void onError(final String msg) { ui.post(new Runnable(){ public void run(){
+                updateAiSpeakLabel();
+                if (aiStatus != null) { aiStatus.setText(msg); aiStatus.setVisibility(View.VISIBLE); }
+            } }); }
+        });
         repo.setListener(new ObdRepository.Listener(){
             public void onState(ObdRepository.State st, String err) {
                 ui.post(new Runnable(){ public void run(){ render(); } });
@@ -622,6 +635,9 @@ public class DiagnosticoView {
             aiTextToggle.setText(show ? "👁 Ocultar texto" : "👁 Mostrar texto");
         } });
         card.addView(aiTextToggle, new LinearLayout.LayoutParams(-1, -2));
+        boolean hayTexto = prev != null;
+        aiResult.setVisibility(hayTexto ? View.GONE : View.VISIBLE);
+        aiTextToggle.setVisibility(hayTexto ? View.VISIBLE : View.GONE);
         updateAiSpeakLabel();
     }
 
@@ -639,7 +655,7 @@ public class DiagnosticoView {
     }
 
     private boolean anySpeaking() {
-        return (speaker != null && speaker.isSpeaking()) || (edgeSpeaker != null && edgeSpeaker.isSpeaking());
+        return TextToSpeechManager.getInstance(host).isSpeaking();
     }
 
     private void updateAiSpeakLabel() {
@@ -710,17 +726,13 @@ public class DiagnosticoView {
     /** Usa siempre TTS local para que la respuesta de voz sea inmediata (sin síntesis en la nube). */
     private void runsAiSpeak(String text) {
         if (text == null) return;
-        try { if (edgeSpeaker != null) edgeSpeaker.stop(); } catch (Throwable ignored) {}
-        pendingCloudText = null;
-        ensureSpeaker().speak(text);
+        TextToSpeechManager.getInstance(host).hablarTextoLargo(text);
         updateAiSpeakLabel();
     }
 
     private void toggleAiSpeak() {
         if (anySpeaking()) {
-            try { if (speaker != null) speaker.stop(); } catch (Throwable ignored) {}
-            try { if (edgeSpeaker != null) edgeSpeaker.stop(); } catch (Throwable ignored) {}
-            pendingCloudText = null;
+            TextToSpeechManager.getInstance(host).detener();
             updateAiSpeakLabel();
             return;
         }
@@ -845,7 +857,14 @@ public class DiagnosticoView {
                     }
                     lastAiText = text;
                     aiLastByMode.put(task, text);
-                    if (aiResult != null) aiResult.setText(text);
+                    if (aiResult != null) {
+                        aiResult.setText(text);
+                        aiResult.setVisibility(View.GONE);
+                    }
+                    if (aiTextToggle != null) {
+                        aiTextToggle.setText("👁 Mostrar texto");
+                        aiTextToggle.setVisibility(View.VISIBLE);
+                    }
                     updateAiSpeakLabel();
                     try {
                         if (host.getPrefs().getBoolean("tts_auto_read", true)) runsAiSpeak(text);
