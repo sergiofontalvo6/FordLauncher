@@ -69,13 +69,32 @@ public class GeminiDiagnosticClient {
 
     /** Guarda el par usuario/modelo solo si hubo respuesta; a partir de aquí no se vuelve a saludar. */
     private static void registrarRespuesta(String userText, String text) {
+        String paraHistorial = textoParaHistorial(text);
         synchronized (HISTORY) {
             HISTORY.add(turn("user", userText));
-            HISTORY.add(turn("model", text));
+            HISTORY.add(turn("model", paraHistorial));
             while (HISTORY.size() > MAX_TURNS) HISTORY.remove(0);
             saludadoEnSesion = true;
             ultimaInteraccionMs = System.currentTimeMillis();
         }
+    }
+
+    /** Evita guardar JSON de acciones en el historial: solo guarda el texto hablado. */
+    private static String textoParaHistorial(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        int i = t.indexOf("\"action\"");
+        if (i < 0) return text;
+        int sp = t.indexOf("\"speech\"");
+        if (sp >= 0) {
+            int colon = t.indexOf(':', sp);
+            int q1 = t.indexOf('"', colon + 1);
+            if (q1 >= 0) {
+                int q2 = t.indexOf('"', q1 + 1);
+                if (q2 > q1) return t.substring(q1 + 1, q2);
+            }
+        }
+        return "Acción ejecutada.";
     }
 
     private static String systemPrompt(String userName, String carName, boolean primera, boolean obdConectado) {
@@ -96,7 +115,18 @@ public class GeminiDiagnosticClient {
                 + "SALUDO: " + (primera
                     ? "esta es la primera interacción de la sesión; puedes saludar brevemente por su nombre al inicio."
                     : "ya lo saludaste en esta sesión. Está PROHIBIDO volver a decir 'Hola', 'Buenos días' o saludar por su nombre al inicio. Entra directo a responder.")
-                + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; frases cortas para leer en voz alta mientras conduce.";
+                + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; frases cortas para leer en voz alta mientras conduce. "
+                + "ACCIONES DEL SISTEMA (solo si el usuario pide algo directamente): "
+                + "Si pide abrir o iniciar una app (ej. 'abre mapas', 'inicia waze', 'abre ajustes'), "
+                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "{\"action\":\"OPEN_APP\",\"app_name\":\"nombre de la app\",\"speech\":\"Abriendo nombre\"}. "
+                + "Si pide reproducir música, una canción o un artista (ej. 'coloca la canción x', 'pon música'), "
+                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "{\"action\":\"PLAY_MUSIC\",\"query\":\"nombre canción o artista\",\"speech\":\"Poniendo canción en Seldia Music\"}. "
+                + "Si pide llamar o marcar a alguien (ej. 'llama a mamá', 'marca al 3001234567', 'haz una llamada a Carlos'), "
+                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "{\"action\":\"MAKE_CALL\",\"target\":\"nombre_o_numero\",\"speech\":\"Llamando a nombre o número\"}. "
+                + "No uses estas acciones para preguntas ni conversación; para todo lo demás responde texto normal.";
     }
 
     /** Quita un saludo inicial repetido (p. ej. "Hola Sergio, ..."). Si no queda nada, devuelve el original. */

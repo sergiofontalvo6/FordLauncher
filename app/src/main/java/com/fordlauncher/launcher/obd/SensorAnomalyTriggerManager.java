@@ -64,6 +64,7 @@ public class SensorAnomalyTriggerManager {
         }
     };
     private boolean running;
+    private long tickDelay = TICK_MS;
     private boolean hablando;
     private int turno;
     private boolean dtcBaselineLista;
@@ -79,12 +80,15 @@ public class SensorAnomalyTriggerManager {
                 if (repo == null || !repo.isConnected()) {
                     motorEncendidoDesde = 0;
                 } else {
-                    evaluarSnapshot(snapshotActual());
+                    Snapshot snap = snapshotActual();
+                    evaluarSnapshot(snap);
+                    if (!Float.isNaN(snap.rpm) && snap.rpm <= 0f) tickDelay = 20000L;
+                    else tickDelay = TICK_MS;
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "tick: " + t);
             }
-            if (running) h.postDelayed(this, TICK_MS);
+            if (running) h.postDelayed(this, tickDelay);
         }
     };
 
@@ -94,7 +98,7 @@ public class SensorAnomalyTriggerManager {
             if (!prefs.getBoolean(PREF_FAB, true)) { stop(); return; }
             if (repo != null && repo.isConnected() && !repo.isDemo() && !consultandoDtc) {
                 consultandoDtc = true;
-                new Thread(new Runnable() {
+                com.fordlauncher.launcher.ai.AppExecutors.get().network.execute(new Runnable() {
                     public void run() {
                         try {
                             Health.EngineReport r = repo.report();
@@ -111,7 +115,7 @@ public class SensorAnomalyTriggerManager {
                             consultandoDtc = false;
                         }
                     }
-                }, "AnomaliaDTC").start();
+                });
             }
             if (running) h.postDelayed(this, DTC_POLL_MS);
         }

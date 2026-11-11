@@ -39,6 +39,7 @@ public class EdgeVoiceSpeaker {
     public interface Listener {
         void onSpeaking(boolean speaking);
         void onError(String msg);
+        default void onDone() {}
     }
 
     private static final String TAG = "FordLauncher/VozNube";
@@ -155,6 +156,7 @@ public class EdgeVoiceSpeaker {
         setSpeaking(false);
         abandon();
         try { if (mp3File != null) { mp3File.delete(); mp3File = null; } } catch (Throwable ignored) {}
+        if (listener != null) listener.onDone();
     }
 
     private void setSpeaking(boolean s) {

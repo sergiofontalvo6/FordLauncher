@@ -61,6 +61,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private volatile boolean isInitialized;
     private volatile boolean initializing;
     private volatile boolean speaking;
+    private volatile Runnable pendingDone;
 
     private TextToSpeechManager(Context context) {
         this.context = context.getApplicationContext();
@@ -215,6 +216,16 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     }
 
     public synchronized void hablarTextoLargo(String textoCompleto) {
+        pendingDone = null;
+        hablarTextoLargoInterno(textoCompleto);
+    }
+
+    public synchronized void hablarTextoLargo(String textoCompleto, Runnable onDone) {
+        pendingDone = onDone;
+        hablarTextoLargoInterno(textoCompleto);
+    }
+
+    private void hablarTextoLargoInterno(String textoCompleto) {
         if (textoCompleto == null || textoCompleto.trim().isEmpty()) return;
         String limpio = limpiar(textoCompleto);
         if (limpio.isEmpty()) return;
@@ -240,6 +251,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                             }
                         });
                     }
+                    public void onDone() { terminar(null); }
                 });
             }
             ultimoTextoNube = texto;
@@ -288,6 +300,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         }
     }
 
+    public void abandonAudioFocus() {
+        try { liberarAudioDucking(); } catch (Throwable ignored) {}
+    }
+
     public synchronized void detener() {
         pendingQueue.clear();
         if (edge != null) {
@@ -313,8 +329,11 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     private void terminar(String error) {
         liberarAudioDucking();
+        Runnable done = pendingDone;
+        pendingDone = null;
         setSpeaking(false);
         if (error != null) notificarError(error);
+        if (error == null && done != null) main.post(done);
     }
 
     private void liberarMotor() {

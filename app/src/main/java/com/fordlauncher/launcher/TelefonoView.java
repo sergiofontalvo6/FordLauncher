@@ -69,7 +69,7 @@ public class TelefonoView {
     private final Main host;
     private final float s;
     private final Handler ui = new Handler();
-    private final ExecutorService bg = Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.Executor bg = com.fordlauncher.launcher.ai.AppExecutors.get().diskIO;
     private volatile boolean contactsLoading;
     private volatile boolean contactsReady;
     private volatile boolean callsLoading;
@@ -93,7 +93,12 @@ public class TelefonoView {
         boolean known;
     }
     private final List<Contact> contacts = new ArrayList<Contact>();
-    private final Map<String, Bitmap> photoCache = new HashMap<String, Bitmap>();
+    private final android.util.LruCache<String, Bitmap> photoCache = new android.util.LruCache<String, Bitmap>(4 * 1024 * 1024) {
+        @Override
+        protected int sizeOf(String key, Bitmap value) {
+            return value == null ? 0 : value.getByteCount();
+        }
+    };
     private final List<CallRec> calls = new ArrayList<CallRec>();
     private final Map<String, String> nameCache = new HashMap<String, String>();
     private LinearLayout content;
@@ -321,7 +326,7 @@ public class TelefonoView {
 
         contacts.clear();
         calls.clear();
-        photoCache.clear();
+        photoCache.evictAll();
         nameCache.clear();
         contactsReady = false;
         callsReady = false;
@@ -940,6 +945,7 @@ public class TelefonoView {
         // Buscador con limpiar (X)
         searchEt = new EditText(host);
         searchEt.setSingleLine(true);
+        KeyboardUtils.configureEditText(searchEt);
         searchEt.setTextColor(TEXT());
         searchEt.setHintTextColor(MUTED());
         searchEt.setHint("Buscar contacto o número…");
@@ -1525,7 +1531,10 @@ public class TelefonoView {
                             int n;
                             while ((n = in.read(data)) > 0) bos.write(data, 0, n);
                             in.close();
-                            Bitmap raw = BitmapFactory.decodeByteArray(bos.toByteArray(), 0, bos.size());
+                            BitmapFactory.Options opts = new BitmapFactory.Options();
+                            opts.inPreferredConfig = Bitmap.Config.RGB_565;
+                            opts.inSampleSize = 2; // fotos de contacto suelen ser >192px; reduce memoria
+                            Bitmap raw = BitmapFactory.decodeByteArray(bos.toByteArray(), 0, bos.size(), opts);
                             if (raw != null) {
                                 bmp = circularCrop(raw, px);
                                 photoCache.put(ct.key, bmp);
@@ -1560,6 +1569,7 @@ public class TelefonoView {
     }
 
     public void destroy() {
+        try { photoCache.evictAll(); } catch (Throwable ignored) {}
         try { if (tone != null) tone.release(); } catch (Throwable ignored) {}
         try { if (themedWindow != null) themedWindow.hide(); } catch (Throwable ignored) {}
         try { if (hfp != null) hfp.close(); } catch (Throwable ignored) {}

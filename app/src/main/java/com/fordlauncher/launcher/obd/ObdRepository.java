@@ -4,6 +4,8 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
+import com.fordlauncher.launcher.ai.AppExecutors;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -51,6 +53,61 @@ public class ObdRepository {
     public void setListener(Listener l) { listener = l; }
 
     public State getState() { return state; }
+    public boolean isConnecting() { return state == State.CONNECTING; }
+
+    /** Autoconexión silenciosa en segundo plano con reintentos progresivos. */
+    public void iniciarAutoconexion(final Context context) {
+        if (isConnected() || isConnecting()) return;
+        final Context c = context.getApplicationContext();
+        AppExecutors.get().network.execute(new Runnable() {
+            public void run() {
+                String mac = targetOrDefault();
+                String saved = readTarget();
+                if (saved == null || saved.trim().length() == 0) {
+                    try {
+                        for (String[] d : pairedDevices()) {
+                            String name = d[1] != null ? d[1].toUpperCase() : "";
+                            if (name.contains("OBD") || name.contains("ELM327") || name.contains("VLINK") || name.contains("OBDII")) {
+                                mac = d[0];
+                                prefs.edit().putString("type", "bt").putString("address", mac).putString("name", mac).apply();
+                                targetAddress = mac;
+                                Log.i("ObdAutoConnect", "OBD emparejado detectado automáticamente: " + name + " [" + mac + "]");
+                                break;
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                } else {
+                    mac = saved;
+                }
+                if (mac == null || mac.trim().length() == 0) {
+                    Log.w("ObdAutoConnect", "No hay adaptador OBD2 emparejado ni configurado.");
+                    return;
+                }
+                ejecutarConexionConReintentos(c, mac, 1);
+            }
+        });
+    }
+
+    private void ejecutarConexionConReintentos(final Context context, final String mac, final int intento) {
+        if (isConnected()) return;
+        Log.d("ObdAutoConnect", "Intentando conectar con OBD2 (" + mac + ") - Intento #" + intento);
+        try {
+            connect(mac);
+        } catch (Throwable t) {
+            Log.w("ObdAutoConnect", "Excepción al conectar: " + t);
+        }
+        if (isConnected()) {
+            Log.i("ObdAutoConnect", "Conexión OBD2 establecida con éxito en segundo plano.");
+            return;
+        }
+        long delaySegundos = (intento <= 4) ? 4 : 12;
+        Log.w("ObdAutoConnect", "Fallo al conectar OBD2. Reintentando en " + delaySegundos + "s...");
+        AppExecutors.get().scheduler.schedule(new Runnable() {
+            public void run() {
+                ejecutarConexionConReintentos(context, mac, intento + 1);
+            }
+        }, delaySegundos, java.util.concurrent.TimeUnit.SECONDS);
+    }
 
     /** Verdadero solo con adaptador enlazado (o modo demo) y sin error de E/S. */
     public boolean isConnected() { return state == State.ON && (demo || elm != null); }
@@ -215,6 +272,13 @@ public class ObdRepository {
                 running = false;
                 setState(State.ERROR, e.getMessage() != null ? e.getMessage() : "Se perdió la conexión con el adaptador");
             }
+            // Reintento automático tras 5 s.
+            final String mac = targetAddress != null ? targetAddress : targetOrDefault();
+            AppExecutors.get().scheduler.schedule(new Runnable() {
+                public void run() {
+                    if (!isConnected()) iniciarAutoconexion(ctx);
+                }
+            }, 5, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 

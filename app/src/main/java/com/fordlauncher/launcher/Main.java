@@ -163,6 +163,14 @@ public class Main extends Activity {
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setBackgroundDrawable(new ColorDrawable(BG));
         prefs = getSharedPreferences("launcher", MODE_PRIVATE);
+        try {
+            com.fordlauncher.launcher.ai.OilLifeManager.getInstance(this).addListener(new com.fordlauncher.launcher.ai.OilLifeManager.Listener() {
+                public void onOdometerChanged(float odometroKm) {
+                    h.post(new Runnable() { public void run() { updateOilWidgetUI(); } });
+                }
+            });
+        } catch (Throwable ignored) {}
+        try { getObdRepo().iniciarAutoconexion(this); } catch (Throwable ignored) {}
         try { parked = new ParkedModeManager(this); } catch (Throwable ignored) {}
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
         migrateOrSetup();
@@ -518,6 +526,9 @@ public class Main extends Activity {
         workshop = null;
         try { if (parked != null) parked.onDestroy(); } catch (Throwable ignored) { }
         try { if (anomalies != null) anomalies.stop(); } catch (Throwable ignored) {}
+        modoConversacionActivo = false;
+        h.removeCallbacks(fabReescuchar);
+        try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
         super.onDestroy();
     }
 
@@ -538,6 +549,7 @@ public class Main extends Activity {
         updateClock();
         refreshStates();
         startGps();
+        try { if (!getObdRepo().isConnected()) getObdRepo().iniciarAutoconexion(this); } catch (Throwable ignored) {}
         h.postDelayed(ticker, 1000);
         h.removeCallbacks(progressTick);
         h.post(progressTick);
@@ -571,23 +583,53 @@ public class Main extends Activity {
         h.removeCallbacks(ticker);
         h.removeCallbacks(progressTick);
         try { if (parked != null) parked.onPause(); } catch (Throwable ignored) {}
+        try { com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).abandonAudioFocus(); } catch (Throwable ignored) {}
     }
 
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        if (ev != null && ev.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+            android.util.Log.e("TOUCH_DEBUG", "Down en rawX=" + ev.getRawX() + " rawY=" + ev.getRawY());
+        }
         // Modo estacionado: un toque lo quita y consume el evento; si no, reinicia el temporizador.
         try {
             if (parked != null && (parked.isShowing() || parked.isEnabled())) {
                 if (parked.dispatchTouch(ev)) return true;
             }
         } catch (Throwable ignored) {}
+        // Cierre automático del teclado al tocar fuera de un EditText.
+        if (ev != null && ev.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+            // Nunca bloquear los toques sobre el botón flotante de IA.
+            if (fabAi != null && fabAi.getVisibility() == View.VISIBLE) {
+                android.graphics.Rect aiRect = new android.graphics.Rect();
+                fabAi.getGlobalVisibleRect(aiRect);
+                if (aiRect.contains((int) ev.getRawX(), (int) ev.getRawY())) {
+                    return super.dispatchTouchEvent(ev);
+                }
+            }
+            View currentFocus = getCurrentFocus();
+            if (currentFocus instanceof android.widget.EditText) {
+                android.graphics.Rect outRect = new android.graphics.Rect();
+                currentFocus.getGlobalVisibleRect(outRect);
+                if (!outRect.contains((int) ev.getRawX(), (int) ev.getRawY())) {
+                    KeyboardUtils.hideKeyboard(currentFocus);
+                }
+            }
+        }
         return super.dispatchTouchEvent(ev);
     }
-
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) immersive();
+        if (hasFocus) {
+            immersive();
+            if (fabAnim != null && prefs.getBoolean("pref_enable_floating_ai_button", true)) {
+                if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
+                else fabAnim.resume();
+            }
+        } else {
+            if (fabAnim != null) fabAnim.pause();
+        }
     }
 
     @Override
@@ -736,14 +778,22 @@ public class Main extends Activity {
     private FrameLayout fabAi;
     private com.fordlauncher.launcher.ai.AiFabAnimator fabAnim;
     private com.fordlauncher.launcher.obd.VoiceInputManager fabVoice;
-    private boolean fabSpeechListening;
+    private boolean fabEscuchando;
     private boolean fabMicPending;
+    private boolean fabSilencio;
+    private boolean modoConversacionActivo;
+    private boolean fabTtsEnCurso;
+    private int fabReintentosTts;
 
     private void buildFloatingAi() {
         int box = (int) (74 * s);
         int core = (int) (54 * s);
         int spark = (int) (30 * s);
         fabAi = new FrameLayout(this);
+        fabAi.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        fabAi.setClickable(true);
+        fabAi.setFocusable(false);
+        fabAi.setFocusableInTouchMode(false);
 
         View glow = new View(this);
         GradientDrawable halo = new GradientDrawable();
@@ -762,6 +812,15 @@ public class Main extends Activity {
         wave.setAlpha(0f);
         wave.setVisibility(View.INVISIBLE);
         fabAi.addView(wave, new FrameLayout.LayoutParams(core, core, Gravity.CENTER));
+
+        View wave2 = new View(this);
+        GradientDrawable ring2 = new GradientDrawable();
+        ring2.setShape(GradientDrawable.OVAL);
+        ring2.setStroke((int) (1 * s), 0xFF4285F4);
+        wave2.setBackground(ring2);
+        wave2.setAlpha(0f);
+        wave2.setVisibility(View.INVISIBLE);
+        fabAi.addView(wave2, new FrameLayout.LayoutParams(core, core, Gravity.CENTER));
 
         FrameLayout coreView = new FrameLayout(this);
         coreView.setBackground(getDrawableOrNull("bg_floating_ai"));
@@ -786,13 +845,13 @@ public class Main extends Activity {
         }
         coreView.addView(sparkle, new FrameLayout.LayoutParams(spark, spark, Gravity.CENTER));
 
-        fabAnim = new com.fordlauncher.launcher.ai.AiFabAnimator(fabAi, glow, wave, sparkle);
+        fabAnim = new com.fordlauncher.launcher.ai.AiFabAnimator(fabAi, glow, wave, wave2, sparkle);
         com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).addListener(
             new com.fordlauncher.launcher.ai.TextToSpeechManager.Listener() {
                 public void onSpeakingChanged(boolean speaking) {
                     if (fabAnim == null) return;
-                    if (speaking) fabAnim.speaking();
-                    else if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING) fabAnim.idle();
+                    if (speaking) { if (fabTtsEnCurso) fabAnim.speaking(); }
+                    else { fabTtsEnCurso = false; if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING) fabAnim.idle(); }
                 }
                 public void onError(String msg) {
                     if (fabAnim != null && fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING) fabAnim.idle();
@@ -832,6 +891,8 @@ public class Main extends Activity {
             }
         });
         refreshFloatingAi();
+        KeyboardUtils.setupAutoHideOnTouchOutside(root, fabAi);
+        KeyboardUtils.configureAllEditTexts(root);
     }
 
     private void refreshFloatingAi() {
@@ -840,8 +901,11 @@ public class Main extends Activity {
         try { en = prefs.getBoolean("pref_enable_floating_ai_button", true); } catch (Throwable ignored) {}
         fabAi.setVisibility(en ? View.VISIBLE : View.GONE);
         if (fabAnim != null) {
-            if (!en) fabAnim.stop();
-            else if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
+            if (!en) { fabAnim.stop(); endFabConversation(); }
+            else {
+                if (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
+                else fabAnim.resume();
+            }
         }
         if (en) {
             float x = -1f, y = -1f;
@@ -877,6 +941,14 @@ public class Main extends Activity {
                 return;
             }
         }
+        // Tocar de nuevo detiene la conversación (o inicia una nueva si está en reposo).
+        if (modoConversacionActivo || (fabAnim != null && (fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.WAITING
+                || fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.LISTENING
+                || fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING))) {
+            endFabConversation();
+            return;
+        }
+        modoConversacionActivo = true;
         startFabListening();
     }
 
@@ -888,14 +960,33 @@ public class Main extends Activity {
     }
 
     private void startFabListening() {
+        if (!modoConversacionActivo) return;
         if (fabVoice == null) fabVoice = new com.fordlauncher.launcher.obd.VoiceInputManager(this);
         fabVoice.setOnBeginningOfSpeech(new Runnable() {
             public void run() { if (fabAnim != null) fabAnim.listening(); }
         });
+        fabVoice.setOnSilence(new Runnable() {
+            public void run() { fabSilencio = true; }
+        });
+        fabSilencio = false;
+        fabEscuchando = true;
         fabVoice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
-            public void onQueryReady(String text) { fabAskAi(text); }
+            public void onQueryReady(String text) {
+                fabEscuchando = false;
+                if (!modoConversacionActivo) return;
+                fabAskAi(text);
+            }
             public void onError(String msg) {
-                stopFabPulse();
+                fabEscuchando = false;
+                boolean silencio = fabSilencio;
+                fabSilencio = false;
+                if (silencio) {
+                    // Finalizar el bucle continuo suavemente.
+                    endFabConversation();
+                    return;
+                }
+                // Error de micrófono distinto: cerrar bucle y avisar.
+                endFabConversation();
                 toast(msg);
             }
         });
@@ -906,16 +997,127 @@ public class Main extends Activity {
         if (fabAnim != null && fabAnim.state() != com.fordlauncher.launcher.ai.AiFabAnimator.OFF) fabAnim.idle();
     }
 
+    private final Runnable fabReescuchar = new Runnable() {
+        public void run() {
+            if (!modoConversacionActivo) return;
+            com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+            if (tm.isSpeaking()) {
+                fabReintentosTts++;
+                if (fabReintentosTts < 12) h.postDelayed(this, 300);
+                else endFabConversation();
+                return;
+            }
+            fabReintentosTts = 0;
+            startFabListening();
+        }
+    };
+
+    private void endFabConversation() {
+        modoConversacionActivo = false;
+        fabTtsEnCurso = false;
+        h.removeCallbacks(fabReescuchar);
+        fabReintentosTts = 0;
+        if (fabVoice != null) {
+            try { fabVoice.cancel(); } catch (Throwable ignored) {}
+        }
+        try {
+            com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+            if (tm.isSpeaking()) tm.detener();
+        } catch (Throwable ignored) {}
+        stopFabPulse();
+    }
+
+    private void fabResponder(String texto, boolean continuar) {
+        if (texto == null || texto.trim().length() == 0) { endFabConversation(); return; }
+        if (!continuar) modoConversacionActivo = false;
+        fabTtsEnCurso = true;
+        showFabTextBubble(texto);
+        com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+        tm.hablarTextoLargo(texto, new Runnable() {
+            public void run() {
+                fabTtsEnCurso = false;
+                if (modoConversacionActivo) {
+                    h.postDelayed(fabReescuchar, 400);
+                }
+            }
+        });
+    }
+
+    private boolean ejecutarAccionIa(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (t.startsWith("```")) {
+            int nl = t.indexOf('\n');
+            if (nl >= 0) t = t.substring(nl + 1);
+            int fence = t.lastIndexOf("```");
+            if (fence >= 0) t = t.substring(0, fence);
+            t = t.trim();
+        }
+        int s = t.indexOf('{');
+        int e = t.lastIndexOf('}');
+        if (s < 0 || e <= s) return false;
+        String json = t.substring(s, e + 1);
+        if (!json.contains("\"action\"")) return false;
+
+        String action = "", speech = "", appName = "", query = "";
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            action = o.optString("action", "").trim();
+            speech = o.optString("speech", "").trim();
+            appName = o.optString("app_name", "").trim();
+            query = o.optString("query", "").trim();
+        } catch (Throwable ignored) {
+            return false;
+        }
+
+        if ("MAKE_CALL".equalsIgnoreCase(action)) {
+            String target = (appName.length() > 0) ? appName : query;
+            try { target = new org.json.JSONObject(json).optString("target", target).trim(); } catch (Throwable ignored) {}
+            if (target.length() == 0) target = query.length() > 0 ? query : appName;
+            String decir = speech.length() > 0 ? speech : ("Llamando a " + target);
+            modoConversacionActivo = false;
+            fabTtsEnCurso = true;
+            showFabTextBubble(decir);
+            final String finalTarget = target;
+            final String finalSpeech = decir;
+            h.postDelayed(new Runnable() {
+                public void run() {
+                    try { com.fordlauncher.launcher.ai.VoiceCallHelper.procesarLlamadaPorVoz(Main.this, finalTarget, finalSpeech); }
+                    catch (Throwable ignored) {}
+                }
+            }, 50);
+            return true;
+        }
+        if ("OPEN_APP".equalsIgnoreCase(action)) {
+            boolean ok = false;
+            try { ok = com.fordlauncher.launcher.ai.AppLauncherHelper.abrirAppPorNombre(Main.this, appName); } catch (Throwable ignored) {}
+            String decir;
+            if (!ok) decir = "No encontré la aplicación " + (appName.length() > 0 ? appName : "solicitada");
+            else decir = speech.length() > 0 ? speech : ("Abriendo " + appName);
+            fabResponder(decir, false);
+            return true;
+        }
+        if ("PLAY_MUSIC".equalsIgnoreCase(action)) {
+            boolean ok = false;
+            try { ok = com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSeldaMusic(Main.this, query); } catch (Throwable ignored) {}
+            String decir;
+            if (!ok) decir = "No pude abrir Seldia Music para reproducir " + (query.length() > 0 ? query : "la música");
+            else decir = speech.length() > 0 ? speech : ("Poniendo " + (query.length() > 0 ? query : "música") + " en Seldia Music");
+            fabResponder(decir, false);
+            return true;
+        }
+        return false;
+    }
+
     private void fabAskAi(final String pregunta) {
-        if (pregunta == null || pregunta.trim().length() == 0) { stopFabPulse(); return; }
+        if (pregunta == null || pregunta.trim().length() == 0) { endFabConversation(); return; }
         // Validación local: si pregunta por el vehículo y el escáner está desconectado, no se consulta a Gemini.
         boolean conectado = false;
         try { conectado = getObdRepo() != null && getObdRepo().isConnected(); } catch (Throwable ignored) {}
         if (com.fordlauncher.launcher.obd.VehicleIntent.requiereVehiculo(pregunta) && !conectado) {
             final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
-            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(aviso);
-            stopFabPulse();
             showFabTextBubble(aviso);
+            fabResponder(aviso, true);
             return;
         }
         final String task = "El conductor pregunta por voz: \"" + pregunta.trim() + "\"";
@@ -927,14 +1129,12 @@ public class Main extends Activity {
                 h.post(new Runnable() {
                     public void run() {
                         if (error != null || text == null) {
-                            stopFabPulse();
+                            endFabConversation();
                             toast(error != null ? error : "Sin respuesta de la IA");
                             return;
                         }
-                        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(text);
-                        if (fabAnim != null && fabAnim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.WAITING) fabAnim.idle();
-                        showFabTextBubble(text);
-                        refreshFloatingAi();
+                        if (ejecutarAccionIa(text)) return;
+                        fabResponder(text, true);
                     }
                 });
             }
@@ -1399,23 +1599,9 @@ public class Main extends Activity {
         Float consKmL = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.CONSUMPTION) : null;
         Float maf = v != null ? v.get(com.fordlauncher.launcher.obd.Pids.MAF) : null;
 
-        // Odómetro propio: suma km recorridos con velocidad en el tiempo.
-        // Resincronización al reconectar: nunca bajar del valor persistido.
-        long nowMs = System.currentTimeMillis();
-        if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
-        if (getObdRepo().getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON) {
-            float persisted = prefInt("odo_km_total", 0);
-            if (persisted > odoKmTotal) odoKmTotal = persisted; // max(odoCpu, odoGuardado)
-        }
-        if (speed != null && speed > 0f && telemLastMs > 0) {
-            float dtH = (nowMs - telemLastMs) / 3600000f;
-            if (prefs.getBoolean("odo_auto", true) && dtH > 0f && dtH < 0.1f) odoKmTotal += speed * dtH;
-            if (odoKmTotal - odoLastSavedKm > 0.5f) {
-                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).putInt("oil_current_odometer", (int) odoKmTotal).apply();
-                odoLastSavedKm = odoKmTotal;
-            }
-        }
-        telemLastMs = nowMs;
+        // Odómetro: delegado a OilLifeManager (OBD2 + GPS fallback), que persiste y notifica.
+        float speedForOdo = (speed != null) ? speed : 0f;
+        com.fordlauncher.launcher.ai.OilLifeManager.getInstance(Main.this).onSpeedUpdate(speedForOdo);
 
         if (rpmGauge != null) rpmGauge.setValue(rpm != null ? rpm : -1f);
         rpmText.setText(rpm != null ? String.format(ES, "%.0f RPM", rpm) : "-- RPM");
@@ -1492,6 +1678,7 @@ public class Main extends Activity {
     private void odometerDialog() {
         final android.widget.EditText et = new android.widget.EditText(this);
         et.setSingleLine(true);
+        KeyboardUtils.configureEditText(et);
         et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         et.setTextColor(TEXT);
         et.setHintTextColor(MUTED);
@@ -1527,6 +1714,7 @@ public class Main extends Activity {
 
         final android.widget.EditText etInterval = new android.widget.EditText(this);
         etInterval.setSingleLine(true);
+        KeyboardUtils.configureEditText(etInterval);
         etInterval.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         etInterval.setTextColor(TEXT);
         etInterval.setHintTextColor(MUTED);
@@ -1534,6 +1722,7 @@ public class Main extends Activity {
 
         final android.widget.EditText etLastOdo = new android.widget.EditText(this);
         etLastOdo.setSingleLine(true);
+        KeyboardUtils.configureEditText(etLastOdo);
         etLastOdo.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         etLastOdo.setTextColor(TEXT);
         etLastOdo.setHintTextColor(MUTED);
@@ -1541,6 +1730,7 @@ public class Main extends Activity {
 
         final android.widget.EditText etDate = new android.widget.EditText(this);
         etDate.setSingleLine(true);
+        KeyboardUtils.configureEditText(etDate);
         etDate.setTextColor(TEXT);
         etDate.setHintTextColor(MUTED);
         etDate.setHint("dd/MM/yyyy");
@@ -1563,6 +1753,7 @@ public class Main extends Activity {
 
         final android.widget.EditText etType = new android.widget.EditText(this);
         etType.setSingleLine(true);
+        KeyboardUtils.configureEditText(etType);
         etType.setTextColor(TEXT);
         etType.setHintTextColor(MUTED);
         etType.setHint("Ej.: 5W-30 sintético");
@@ -1829,6 +2020,24 @@ public class Main extends Activity {
         return callWin;
     }
 
+    /** Marca un número por HFP (usado por el copiloto por voz). */
+    public void callNumber(String number) {
+        if (number == null || number.trim().length() == 0) return;
+        if (phone == null) {
+            try { phone = new TelefonoView(this, s > 0 ? s : 1f); } catch (Throwable ignored) {}
+        }
+        if (phone != null) {
+            try { phone.callNumber(number); return; } catch (Throwable ignored) {}
+        }
+        // Fallback: intent de llamada del sistema.
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CALL);
+            i.setData(android.net.Uri.parse("tel:" + number));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Throwable ignored) {}
+    }
+
     /** Estados HFP llegan desde PhonePrivacy aunque el panel Teléfono esté cerrado. */
     void onPhoneCallState(String state, String number) {
         int st;
@@ -1982,17 +2191,8 @@ public class Main extends Activity {
                 try {
                     boolean obdOn = getObdRepo().getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON;
                     float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0f;
-                    if (!obdOn && kmh > 5f && lastGpsLoc != null) {
-                        float distM = l.distanceTo(lastGpsLoc);
-                        if (distM > 1f && distM < 5000f) {
-                            if (odoKmTotal < 0f) { odoKmTotal = prefInt("odo_km_total", 0); odoLastSavedKm = odoKmTotal; }
-                            if (prefs.getBoolean("odo_auto", true)) odoKmTotal += distM / 1000f;
-                            if (odoKmTotal - odoLastSavedKm > 0.5f) {
-                                prefs.edit().putInt("odo_km_total", (int) odoKmTotal).putInt("oil_current_odometer", (int) odoKmTotal).apply();
-                                odoLastSavedKm = odoKmTotal;
-                            }
-                            updateOilWidgetUI();
-                        }
+                    if (!obdOn) {
+                        com.fordlauncher.launcher.ai.OilLifeManager.getInstance(Main.this).onSpeedUpdate(kmh);
                     }
                     lastGpsLoc = l;
                 } catch (Throwable ignored) {}
@@ -2413,6 +2613,7 @@ public class Main extends Activity {
     private void editText(final String key, String title, String def) {
         final android.widget.EditText et = new android.widget.EditText(this);
         et.setSingleLine(true);
+        KeyboardUtils.configureEditText(et);
         et.setTextColor(TEXT);
         et.setHintTextColor(MUTED);
         et.setText(prefs.getString(key, def));
@@ -2602,6 +2803,7 @@ public class Main extends Activity {
     private void ask(final String key, String title, String def, final Runnable next) {
         final android.widget.EditText et = new android.widget.EditText(this);
         et.setSingleLine(true);
+        KeyboardUtils.configureEditText(et);
         et.setTextColor(TEXT);
         et.setHintTextColor(MUTED);
         et.setText(prefs.getString(key, def));
