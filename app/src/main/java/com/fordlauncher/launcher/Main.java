@@ -2026,8 +2026,15 @@ public class Main extends Activity {
                 // con retrasos para garantizar foco visual/táctil.
                 if (st == 4) {
                     final String num = number;
-                    h.postDelayed(new Runnable() { public void run() { try { callWindow().show(num, null, 4); } catch (Throwable ignored) {} } }, 200);
-                    h.postDelayed(new Runnable() { public void run() { try { callWindow().show(num, null, 4); } catch (Throwable ignored) {} } }, 500);
+                    for (int d : new int[]{100, 250, 500, 900, 1500}) {
+                        h.postDelayed(new Runnable() {
+                            public void run() {
+                                try {
+                                    if (callWin != null) callWin.show(num, null, 4);
+                                } catch (Throwable ignored) {}
+                            }
+                        }, d);
+                    }
                 }
             }
         } catch (Throwable ignored) {}
