@@ -2020,7 +2020,16 @@ public class Main extends Activity {
         try { st = Integer.parseInt(state); } catch (Throwable t) { return; }
         try {
             if (st == 7) callWindow().finish();
-            else if (st >= 0) callWindow().show(number, null, st);
+            else if (st >= 0) {
+                callWindow().show(number, null, st);
+                // Llamada entrante (RINGING=4): re-lanzar el card por encima de BTSuite
+                // con retrasos para garantizar foco visual/táctil.
+                if (st == 4) {
+                    final String num = number;
+                    h.postDelayed(new Runnable() { public void run() { try { callWindow().show(num, null, 4); } catch (Throwable ignored) {} } }, 200);
+                    h.postDelayed(new Runnable() { public void run() { try { callWindow().show(num, null, 4); } catch (Throwable ignored) {} } }, 500);
+                }
+            }
         } catch (Throwable ignored) {}
     }
 

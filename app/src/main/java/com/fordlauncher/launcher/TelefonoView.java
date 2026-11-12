@@ -970,6 +970,22 @@ public class TelefonoView {
         colHolder.setPadding((int) (12 * s), (int) (4 * s), (int) (12 * s), (int) (4 * s));
         c.addView(colHolder, new LinearLayout.LayoutParams(-1, -2));
 
+        // Botón importar contactos desde archivo .vcf
+        TextView impVcf = txt("Importar contactos (.vcf)", 13, ACCENT(), true);
+        impVcf.setGravity(Gravity.CENTER);
+        impVcf.setPadding((int) (12 * s), (int) (6 * s), (int) (12 * s), (int) (6 * s));
+        impVcf.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int n = importVcfFromDownload();
+                toast(n > 0 ? "Importados " + n + " contactos" : "No se encontraron .vcf en /sdcard/Download");
+                contactsReady = false;
+                loadContacts();
+                contactsReady = true;
+                render();
+            }
+        });
+        c.addView(impVcf, new LinearLayout.LayoutParams(-2, -2));
+
         LinearLayout btnRow = new LinearLayout(host);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         btnRow.setGravity(Gravity.CENTER);
@@ -1243,6 +1259,22 @@ public class TelefonoView {
         } catch (Throwable ignored) { }
         try { if (c != null) c.close(); } catch (Throwable ignored) {}
 
+        // Integrar contactos importados desde .vcf
+        try {
+            String json = host.getPrefs().getString("phone_vcf_contacts", null);
+            if (json != null) {
+                org.json.JSONArray arr = new org.json.JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject o = arr.getJSONObject(i);
+                    Contact ct = new Contact();
+                    ct.key = o.optString("key", "");
+                    ct.name = o.optString("name", "Desconocido");
+                    ct.number = o.optString("number", "");
+                    if (ct.name.length() > 0 && ct.number.length() >= 7) out.add(ct);
+                }
+            }
+        } catch (Throwable ignored) {}
+
         // Deduplicar por número normalizado (últimos 7-10 dígitos).
         Set<String> seen = new HashSet<String>();
         List<Contact> deduped = new ArrayList<Contact>();
@@ -1258,6 +1290,8 @@ public class TelefonoView {
         contacts.clear();
         contacts.addAll(out);
 
+        android.util.Log.i("FordLauncher/Phone", "Contactos cargados: " + out.size());
+
         // Favoritos: exclusivamente manuales (estrella) + estrellas del sistema.
         // No se rellenan por frecuencia de llamadas.
         Set<String> favs = prefsFav();
@@ -1272,9 +1306,60 @@ public class TelefonoView {
         }
         contacts.clear();
         contacts.addAll(out);
+
+        android.util.Log.i("FordLauncher/Phone", "Contactos cargados: " + out.size());
     }
 
-    /** Historial real de llamadas del radio (BTSuite / HFP). */
+    /** Importa contactos desde archivos .vcf en /sdcard/Download (parseo básico). */
+    private int importVcfFromDownload() {
+        int added = 0;
+        java.io.File dir = new java.io.File("/sdcard/Download");
+        java.io.File[] files = dir.exists() ? dir.listFiles(new java.io.FilenameFilter() {
+            public boolean accept(java.io.File d, String name) { return name.toLowerCase().endsWith(".vcf"); }
+        }) : null;
+        if (files == null || files.length == 0) return 0;
+        Set<String> favs = prefsFav();
+        List<Contact> imported = new ArrayList<Contact>();
+        for (java.io.File f : files) {
+            try {
+                java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f));
+                String line, name = null, number = null;
+                while ((line = br.readLine()) != null) {
+                    line = line.trim();
+                    if (line.toUpperCase().startsWith("FN:")) name = line.substring(3).trim();
+                    else if (line.toUpperCase().startsWith("TEL")) {
+                        int idx = line.indexOf(':');
+                        if (idx >= 0) number = line.substring(idx + 1).trim().replaceAll("[^0-9+]", "");
+                    } else if (line.equalsIgnoreCase("END:VCARD")) {
+                        if (name != null && number != null && number.length() >= 7) {
+                            Contact ct = new Contact();
+                            ct.key = "vcf_" + number;
+                            ct.name = name;
+                            ct.number = number;
+                            ct.starred = favs.contains(ct.key);
+                            imported.add(ct);
+                            added++;
+                        }
+                        name = null; number = null;
+                    }
+                }
+                br.close();
+            } catch (Throwable ignored) {}
+        }
+        // Persistir en prefs como JSON simple
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (Contact ct : imported) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("key", ct.key);
+                o.put("name", ct.name);
+                o.put("number", ct.number);
+                arr.put(o);
+            }
+            host.getPrefs().edit().putString("phone_vcf_contacts", arr.toString()).apply();
+        } catch (Throwable ignored) {}
+        return added;
+    }
     static final Uri BT_CALLLOG_URI =
             Uri.parse("content://com.autochips.bluetooth.calllog/bluetooth_calllog_table");
 
