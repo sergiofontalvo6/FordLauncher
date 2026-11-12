@@ -587,6 +587,16 @@ public class Main extends Activity {
     }
 
     @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        if (event != null) {
+            android.util.Log.e("KEY_DEBUG", "keyCode=" + event.getKeyCode() + " action=" + event.getAction()
+                    + " source=" + event.getSource() + " device=" + (event.getDevice() != null ? event.getDevice().getName() : "null")
+                    + " repeat=" + event.getRepeatCount());
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
         if (ev != null && ev.getAction() == android.view.MotionEvent.ACTION_DOWN) {
             android.util.Log.e("TOUCH_DEBUG", "Down en rawX=" + ev.getRawX() + " rawY=" + ev.getRawY());
@@ -1172,41 +1182,7 @@ public class Main extends Activity {
 
     /** Burbuja pequeña con la respuesta de la IA: texto oculto + botón "👁 Mostrar texto". */
     private void showFabTextBubble(final String text) {
-        try {
-            if (fabBubble != null && fabBubble.getParent() == root) root.removeView(fabBubble);
-        } catch (Throwable ignored) {}
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(round(CARD, 12));
-        card.setPadding((int) (12 * s), (int) (10 * s), (int) (12 * s), (int) (10 * s));
-        TextView r = tv(text, 12, TEXT, false);
-        r.setVisibility(View.GONE); // oculto: se lee en voz alta
-        card.addView(r, new LinearLayout.LayoutParams(-1, -2));
-        TextView tg = tv("👁 Mostrar texto", 11, MUTED, true);
-        tg.setGravity(Gravity.RIGHT);
-        tg.setPadding(0, (int) (2 * s), 0, 0);
-        tg.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                boolean show = r.getVisibility() != View.VISIBLE;
-                r.setVisibility(show ? View.VISIBLE : View.GONE);
-                tg.setText(show ? "👁 Ocultar texto" : "👁 Mostrar texto");
-            }
-        });
-        card.addView(tg, new LinearLayout.LayoutParams(-1, -2));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (300 * s), -2);
-        lp.gravity = Gravity.TOP | Gravity.LEFT;
-        float bx = 12 * s, by = Math.max(12 * s, (fabAi != null ? fabAi.getY() - 140 * s : 100 * s));
-        lp.leftMargin = (int) bx;
-        lp.topMargin = (int) by;
-        root.addView(card, lp);
-        card.bringToFront();
-        card.setOnLongClickListener(new View.OnLongClickListener() {
-            public boolean onLongClick(View v) {
-                try { if (v.getParent() == root) root.removeView(v); } catch (Throwable ignored) {}
-                return true;
-            }
-        });
-        fabBubble = card;
+        // Deshabilitado: el cuadro de texto del copiloto flotante no se renderiza.
     }
 
     private LinearLayout fabBubble;

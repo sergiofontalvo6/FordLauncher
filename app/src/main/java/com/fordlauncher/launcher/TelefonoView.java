@@ -999,7 +999,7 @@ public class TelefonoView {
         imp.setPadding((int) (14 * s), (int) (9 * s), (int) (14 * s), (int) (9 * s));
         imp.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                int n = importFavorites(true);
+                int n = importFavorites();
                 int total = 0;
                 for (Contact ct : contacts) if (ct.starred) total++;
                 if (n > 0) toast("Favoritos importados: " + n);
@@ -1243,15 +1243,27 @@ public class TelefonoView {
         } catch (Throwable ignored) { }
         try { if (c != null) c.close(); } catch (Throwable ignored) {}
 
+        // Deduplicar por número normalizado (últimos 7-10 dígitos).
+        Set<String> seen = new HashSet<String>();
+        List<Contact> deduped = new ArrayList<Contact>();
+        for (Contact ct : out) {
+            String norm = cleanNumber(ct.number);
+            if (norm != null && norm.length() > 7) norm = norm.substring(norm.length() - Math.min(10, norm.length()));
+            if (norm != null && !norm.isEmpty() && seen.contains(norm)) continue;
+            if (norm != null && !norm.isEmpty()) seen.add(norm);
+            deduped.add(ct);
+        }
+        out = deduped;
+
         contacts.clear();
         contacts.addAll(out);
 
-        // Favoritos: primero los que ya marcó el usuario. La primera vez se
-        // intenta traer las estrellas del teléfono; si el PBAP no las expone
-        // (iPhone), se usan los números más llamados como aproximación.
+        // Favoritos: exclusivamente manuales (estrella) + estrellas del sistema.
+        // No se rellenan por frecuencia de llamadas.
         Set<String> favs = prefsFav();
         if (!host.getPrefs().getBoolean("phone_fav_imported", false)) {
-            importFavorites(true);
+            // Importar solo las estrellas existentes en la agenda del sistema.
+            importFavorites();
             favs = prefsFav();
         }
         for (Contact ct : out) {
@@ -1271,7 +1283,7 @@ public class TelefonoView {
      * agenda del sistema; si no hay ninguna (el PBAP del iPhone no expone el
      * atributo "favorito"), usa los números más llamados del historial HFP.
      */
-    private int importFavorites(boolean includeTopCalled) {
+    private int importFavorites() {
         int added = 0;
         try {
             Set<String> favs = prefsFav();
@@ -1292,28 +1304,14 @@ public class TelefonoView {
                     if (favs.add(ct.key)) added++;
                 }
             }
-            if (includeTopCalled && favs.size() == before) {
-                final Map<String, Integer> freq = readBtCallFreq();
-                List<Contact> ranked = new ArrayList<Contact>(contacts);
-                Collections.sort(ranked, new Comparator<Contact>() {
-                    public int compare(Contact a, Contact b) {
-                        int fa = freqOf(freq, a.number);
-                        int fb = freqOf(freq, b.number);
-                        if (fa != fb) return fb - fa;
-                        return a.name.compareToIgnoreCase(b.name);
-                    }
-                });
-                for (Contact ct : ranked) {
-                    if (added >= 8) break;
-                    if (freqOf(freq, ct.number) <= 0) continue;
-                    if (favs.add(ct.key)) added++;
-                }
-            }
             if (added > 0) {
                 host.getPrefs().edit()
                         .putStringSet("phone_fav_ids", favs)
                         .putBoolean("phone_fav_imported", true).apply();
                 for (Contact ct : contacts) if (favs.contains(ct.key)) ct.starred = true;
+            } else {
+                // Marcar como importado aunque no haya estrellas, para no reintentar.
+                host.getPrefs().edit().putBoolean("phone_fav_imported", true).apply();
             }
         } catch (Throwable ignored) {}
         return added;
