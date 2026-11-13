@@ -354,6 +354,125 @@ public class Main extends Activity {
     private android.database.ContentObserver brightnessObserver;
     private int lastBrightness = -1;
 
+    // ── Iluminación (ILL) ────────────────────────────────────────────
+    // Fuente de verdad: android.carstatus.CarStatus.getHeadLightStatus() (la misma
+    // que usa com.hcn.util.Util.isHeadlightOn) y la propiedad rw.out.dark que lee
+    // Zlink en ZlinkCore.getDarkMode. Se sondea ligero (1 s) porque el MCU no emite
+    // un broadcast de luces en esta AC8227L/HCN.
+    private Object hcnCarStatus;
+    private java.lang.reflect.Method hcnGetHeadlight;
+    private java.lang.reflect.Method sysPropGet;
+    private int lastIllumSignal = -1;      // último valor crudo registrado
+    private int illumCandidate = -1;       // valor candidato para debounce
+    private int illumCandidateCount = 0;
+    private int illumApplied = -1;         // último valor aplicado a la foto
+    private long lastIllumLogMs = 0L;
+    private final Runnable illumPoller = new Runnable() {
+        public void run() {
+            try { pollIllumination(); } catch (Throwable ignored) {}
+            h.postDelayed(this, 700);
+        }
+    };
+
+    private void startIlluminationPolling() {
+        try {
+            h.removeCallbacks(illumPoller);
+            h.post(illumPoller);
+        } catch (Throwable ignored) {}
+    }
+
+    private void stopIlluminationPolling() {
+        try { h.removeCallbacks(illumPoller); } catch (Throwable ignored) {}
+    }
+
+    private String sysProp(String key) {
+        try {
+            if (sysPropGet == null) {
+                Class<?> sp = Class.forName("android.os.SystemProperties");
+                sysPropGet = sp.getMethod("get", String.class, String.class);
+            }
+            Object v = sysPropGet.invoke(null, key, "");
+            return v == null ? "" : v.toString();
+        } catch (Throwable t) { return ""; }
+    }
+
+    private int readHeadlightSignal() {
+        // 1) CarStatus de HCN (misma fuente que com.hcn.util.Util.isHeadlightOn)
+        try {
+            if (hcnGetHeadlight == null) {
+                Class<?> cls = Class.forName("android.carstatus.CarStatus");
+                try {
+                    hcnCarStatus = cls.getConstructor().newInstance();
+                } catch (Throwable t) {
+                    java.lang.reflect.Constructor<?> c = cls.getDeclaredConstructor();
+                    c.setAccessible(true);
+                    hcnCarStatus = c.newInstance();
+                }
+                hcnGetHeadlight = cls.getMethod("getHeadLightStatus");
+            }
+            Object r = hcnGetHeadlight.invoke(hcnCarStatus);
+            if (r instanceof Boolean) return ((Boolean) r) ? 1 : 0;
+        } catch (Throwable ignored) {}
+
+        // 2) Propiedad que lee Zlink (ZlinkCore.getDarkMode -> rw.out.dark)
+        String dark = sysProp("rw.out.dark");
+        if (dark != null && dark.length() > 0) {
+            String v = dark.trim().toLowerCase(java.util.Locale.ROOT);
+            if ("1".equals(v) || "true".equals(v) || "on".equals(v) || "yes".equals(v) || "dark".equals(v) || "night".equals(v)) return 1;
+            if ("0".equals(v) || "false".equals(v) || "off".equals(v) || "no".equals(v) || "day".equals(v)) return 0;
+        }
+
+        // 3) Modo noche del sistema (ILL/tema HCN)
+        try {
+            android.app.UiModeManager um = (android.app.UiModeManager) getSystemService(android.content.Context.UI_MODE_SERVICE);
+            if (um != null) {
+                int m = um.getNightMode();
+                if (m == android.app.UiModeManager.MODE_NIGHT_YES) return 1;
+                if (m == android.app.UiModeManager.MODE_NIGHT_NO) return 0;
+            }
+        } catch (Throwable ignored) {}
+        return -1;
+    }
+
+    private void pollIllumination() {
+        if (prefs == null) return;
+        if (!prefs.getBoolean("auto_headlight_theme", true)) return;
+        int signal = readHeadlightSignal();
+        if (signal < 0) return;
+
+        boolean rawChanged = signal != lastIllumSignal;
+        lastIllumSignal = signal;
+
+        // Debounce: el MCU puede rebotar al pasar por posición/DRL; exigir 2 lecturas
+        // consecutivas iguales (~1.4 s) antes de cambiar la foto.
+        if (signal == illumCandidate) illumCandidateCount++;
+        else { illumCandidate = signal; illumCandidateCount = 1; }
+
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (rawChanged || now - lastIllumLogMs > 15000L) {
+            lastIllumLogMs = now;
+            String ui = "?";
+            try {
+                android.app.UiModeManager um = (android.app.UiModeManager) getSystemService(android.content.Context.UI_MODE_SERVICE);
+                if (um != null) ui = String.valueOf(um.getNightMode());
+            } catch (Throwable ignored) {}
+            android.util.Log.i("FordLauncher/Illum", "raw=" + signal + " stable=" + illumCandidateCount
+                    + " dark=\"" + sysProp("rw.out.dark") + "\" ui=" + ui);
+        }
+
+        if (illumCandidateCount < 2) return;
+        if (illumApplied == signal) return;
+        illumApplied = signal;
+
+        boolean night = signal == 1;
+        boolean was = prefs.getBoolean("headlight_night_active", false);
+        if (was != night) {
+            prefs.edit().putBoolean("headlight_night_active", night).apply();
+            if (carCardContainer != null) refreshCarPhotoInCard(carCardContainer);
+            android.util.Log.i("FordLauncher/Illum", "APLICADO night=" + night);
+        }
+    }
+
     private ImageView carImageView;
     private LinearLayout carPlaceholderLayout;
     private FrameLayout carCardContainer;
@@ -459,6 +578,7 @@ public class Main extends Activity {
                 try {
                     int night = getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
                     boolean isNight = (night == android.content.res.Configuration.UI_MODE_NIGHT_YES);
+                    lastIllumSignal = isNight ? 1 : 0;
                     boolean wasNight = prefs.getBoolean("headlight_night_active", false);
                     if (isNight != wasNight) {
                         prefs.edit().putBoolean("headlight_night_active", isNight).apply();
@@ -471,6 +591,10 @@ public class Main extends Activity {
                 return;
             }
 
+            lastIllumSignal = nightMode ? 1 : 0;
+            illumCandidate = lastIllumSignal;
+            illumCandidateCount = 2;
+            illumApplied = lastIllumSignal;
             prefs.edit().putBoolean("headlight_night_active", nightMode).apply();
             if (carCardContainer != null) {
                 refreshCarPhotoInCard(carCardContainer);
@@ -591,6 +715,7 @@ public class Main extends Activity {
         h.removeCallbacks(fabReescuchar);
         try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
         try { unregisterReceiver(wakeReceiver); } catch (Throwable ignored) {}
+        try { stopIlluminationPolling(); } catch (Throwable ignored) {}
         super.onDestroy();
     }
 
@@ -618,6 +743,7 @@ public class Main extends Activity {
         applyAaNotif(NotifArt.lastArt, NotifArt.lastTexts);
         try { if (parked != null) parked.onResume(); } catch (Throwable ignored) {}
         try { maybeSpeakBootGreeting("resume"); } catch (Throwable ignored) {}
+        try { startIlluminationPolling(); } catch (Throwable ignored) {}
     }
 
     /** Android 6+: respuesta a la solicitud de permisos. */
@@ -642,6 +768,7 @@ public class Main extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        try { stopIlluminationPolling(); } catch (Throwable ignored) {}
         stopGps();
         h.removeCallbacks(ticker);
         h.removeCallbacks(progressTick);
