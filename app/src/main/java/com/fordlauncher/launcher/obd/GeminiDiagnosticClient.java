@@ -2,6 +2,9 @@ package com.fordlauncher.launcher.obd;
 
 import android.content.Context;
 import android.util.Log;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -22,22 +25,72 @@ public class GeminiDiagnosticClient {
     private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
 
-    // Memoria conversacional corta: solo turnos user/model (las instrucciones van en systemInstruction).
+    // Memoria conversacional: turnos user/model persistidos en almacenamiento local.
     private static final java.util.List<String> HISTORY = new java.util.ArrayList<String>();
-    private static final int MAX_TURNS = 8;
+    private static final int MAX_TURNS = 16; // historial persistente más amplio
     private static final long SESSION_IDLE_MS = 15 * 60 * 1000L;
     private static final String PREFIX_VOZ = "El conductor pregunta por voz";
+    private static final String MEMORY_FILE = "ai_memory.json";
     private static volatile boolean saludadoEnSesion;
     private static volatile long ultimaInteraccionMs;
+    private static volatile boolean historyLoaded;
+    private static volatile java.io.File memoryFileRef;
+
+    private static synchronized void ensureLoaded(Context ctx) {
+        if (historyLoaded) return;
+        historyLoaded = true;
+        if (ctx == null) return;
+        try {
+            memoryFileRef = new File(ctx.getApplicationContext().getFilesDir(), MEMORY_FILE);
+            if (!memoryFileRef.exists()) return;
+            FileInputStream fis = new FileInputStream(memoryFileRef);
+            byte[] buf = new byte[(int) memoryFileRef.length()];
+            int n = fis.read(buf);
+            fis.close();
+            if (n <= 0) return;
+            String json = new String(buf, 0, n, "UTF-8").trim();
+            if (!json.startsWith("[")) return;
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            synchronized (HISTORY) {
+                HISTORY.clear();
+                for (int i = 0; i < arr.length(); i++) {
+                    String t = arr.optString(i, null);
+                    if (t != null && t.length() > 0) HISTORY.add(t);
+                }
+                while (HISTORY.size() > MAX_TURNS) HISTORY.remove(0);
+                if (!HISTORY.isEmpty()) saludadoEnSesion = true;
+            }
+        } catch (Throwable t) {
+            Log.w("FordLauncher/AI", "No se pudo cargar memoria: " + t);
+        }
+    }
+
+    private static synchronized void saveHistory(Context ctx) {
+        try {
+            File f = memoryFileRef;
+            if (f == null && ctx != null) f = new File(ctx.getApplicationContext().getFilesDir(), MEMORY_FILE);
+            if (f == null) return;
+            memoryFileRef = f;
+            org.json.JSONArray arr = new org.json.JSONArray();
+            synchronized (HISTORY) {
+                for (String t : HISTORY) arr.put(t);
+            }
+            FileOutputStream fos = new FileOutputStream(f, false);
+            fos.write(arr.toString().getBytes("UTF-8"));
+            fos.close();
+        } catch (Throwable t) {
+            Log.w("FordLauncher/AI", "No se pudo guardar memoria: " + t);
+        }
+    }
 
     public static void clearHistory() {
         synchronized (HISTORY) { HISTORY.clear(); }
+        try { if (memoryFileRef != null) memoryFileRef.delete(); } catch (Throwable ignored) {}
     }
 
-    /** Reinicia la sesión (memoria y saludo). Llamar al apagar el contacto del auto. */
+    /** Reinicia la sesión de saludo, pero conserva el historial persistente. */
     public static void resetSession() {
         synchronized (HISTORY) {
-            HISTORY.clear();
             saludadoEnSesion = false;
             ultimaInteraccionMs = 0L;
         }
@@ -48,11 +101,12 @@ public class GeminiDiagnosticClient {
     }
 
     /** Cuerpo de la petición: systemInstruction + historial + el turno actual del usuario. */
-    private static String bodyJson(String systemText, String userText, boolean conversacion) {
+    private static String bodyJson(Context ctx, String systemText, String userText, boolean conversacion) {
+        ensureLoaded(ctx);
         synchronized (HISTORY) {
+            // Memoria persistente: no se borra por inactividad, solo se actualiza el saludo de sesión.
             long ahora = System.currentTimeMillis();
             if (ultimaInteraccionMs > 0 && ahora - ultimaInteraccionMs > SESSION_IDLE_MS) {
-                HISTORY.clear();
                 saludadoEnSesion = false;
             }
             StringBuilder b = new StringBuilder();
@@ -61,14 +115,14 @@ public class GeminiDiagnosticClient {
             for (String t : HISTORY) b.append(t).append(",");
             b.append(turn("user", userText));
             b.append("]");
-            b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(conversacion ? 180 : 140)
+            b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(conversacion ? 220 : 140)
              .append(",\"temperature\":0.4}}");
             return b.toString();
         }
     }
 
-    /** Guarda el par usuario/modelo solo si hubo respuesta; a partir de aquí no se vuelve a saludar. */
-    private static void registrarRespuesta(String userText, String text) {
+    /** Guarda el par usuario/modelo y lo persiste; a partir de aquí no se vuelve a saludar. */
+    private static void registrarRespuesta(Context ctx, String userText, String text) {
         String paraHistorial = textoParaHistorial(text);
         synchronized (HISTORY) {
             HISTORY.add(turn("user", userText));
@@ -77,6 +131,7 @@ public class GeminiDiagnosticClient {
             saludadoEnSesion = true;
             ultimaInteraccionMs = System.currentTimeMillis();
         }
+        saveHistory(ctx);
     }
 
     /** Evita guardar JSON de acciones en el historial: solo guarda el texto hablado. */
@@ -117,14 +172,13 @@ public class GeminiDiagnosticClient {
                     : "ya lo saludaste en esta sesión. Está PROHIBIDO volver a decir 'Hola', 'Buenos días' o saludar por su nombre al inicio. Entra directo a responder.")
                 + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; frases cortas para leer en voz alta mientras conduce. "
                 + "ACCIONES DEL SISTEMA (solo si el usuario pide algo directamente): "
-                + "Si pide abrir o iniciar una app (ej. 'abre mapas', 'inicia waze', 'abre ajustes'), "
-                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "Puedes controlar la radio: abrir cualquier aplicación instalada (Seldia Music, Waze, Maps, YouTube, Ajustes, Radio FM, Teléfono, etc.) "
+                + "y realizar llamadas a contactos o números. "
+                + "Si pide abrir o iniciar una app, responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
                 + "{\"action\":\"OPEN_APP\",\"app_name\":\"nombre de la app\",\"speech\":\"Abriendo nombre\"}. "
-                + "Si pide reproducir música, una canción o un artista (ej. 'coloca la canción x', 'pon música'), "
-                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "Si pide reproducir música, una canción o un artista, responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
                 + "{\"action\":\"PLAY_MUSIC\",\"query\":\"nombre canción o artista\",\"speech\":\"Poniendo canción en Seldia Music\"}. "
-                + "Si pide llamar o marcar a alguien (ej. 'llama a mamá', 'marca al 3001234567', 'haz una llamada a Carlos'), "
-                + "responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
+                + "Si pide llamar o marcar a alguien por nombre o número, responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
                 + "{\"action\":\"MAKE_CALL\",\"target\":\"nombre_o_numero\",\"speech\":\"Llamando a nombre o número\"}. "
                 + "No uses estas acciones para preguntas ni conversación; para todo lo demás responde texto normal.";
     }
@@ -198,9 +252,10 @@ public class GeminiDiagnosticClient {
                     // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
                     String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
                     final boolean primera = !saludadoEnSesion;
+                    ensureLoaded(ctx);
                     String systemPrompt = systemPrompt(userName, carName, primera, obdConectado);
                     String userText = taskText + ": " + snap + "." + formato;
-                    String body = bodyJson(systemPrompt, userText, conversacion);
+                    String body = bodyJson(ctx, systemPrompt, userText, conversacion);
                     final byte[] bytes = body.getBytes("UTF-8");
                     final String reqUrl = url;
                     // Plazo reducido para priorizar respuesta rápida en la radio.
@@ -233,7 +288,7 @@ public class GeminiDiagnosticClient {
                     }
                     Log.i("FordLauncher/AI", "Gemini OK (" + text.length() + " chars)");
                     String limpio = primera ? text.trim() : quitarSaludo(text, userName);
-                    registrarRespuesta(userText, limpio);
+                    registrarRespuesta(ctx, userText, limpio);
                     if (callback != null) callback.onDone(limpio, null);
                 } catch (Throwable e) {
                     if (callback != null) callback.onDone(null, ERR_CONN);

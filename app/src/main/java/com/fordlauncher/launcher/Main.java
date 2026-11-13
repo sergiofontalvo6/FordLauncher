@@ -181,6 +181,12 @@ public class Main extends Activity {
         headlightFilter.addAction("android.intent.action.CONFIGURATION_CHANGED");
         headlightFilter.addAction("autochips.intent.action.HEADLIGHT_ON");
         headlightFilter.addAction("autochips.intent.action.HEADLIGHT_OFF");
+        headlightFilter.addAction("android.intent.action.HEADLIGHT_ON");
+        headlightFilter.addAction("android.intent.action.HEADLIGHT_OFF");
+        headlightFilter.addAction("com.hcn.autocan.action.HEADLIGHT_ON");
+        headlightFilter.addAction("com.hcn.autocan.action.HEADLIGHT_OFF");
+        headlightFilter.addAction("com.hcn.intent.action.HEADLIGHT_ON");
+        headlightFilter.addAction("com.hcn.intent.action.HEADLIGHT_OFF");
         Intent sticky = registerReceiver(headlightReceiver, headlightFilter);
         if (sticky != null && sticky.getAction() != null) {
             String act = sticky.getAction();
@@ -206,6 +212,25 @@ public class Main extends Activity {
                 brightnessObserver
             );
         } catch (Throwable ignored) {}
+
+        try {
+            IntentFilter wf = new IntentFilter();
+            wf.addAction(Intent.ACTION_SCREEN_ON);
+            wf.addAction(Intent.ACTION_SCREEN_OFF);
+            wf.addAction(Intent.ACTION_USER_PRESENT);
+            registerReceiver(wakeReceiver, wf);
+        } catch (Throwable ignored) {}
+        try { maybeSpeakBootGreeting("start"); } catch (Throwable ignored) {}
+
+        try {
+            IntentFilter wf = new IntentFilter();
+            wf.addAction(Intent.ACTION_SCREEN_ON);
+            wf.addAction(Intent.ACTION_SCREEN_OFF);
+            wf.addAction(Intent.ACTION_USER_PRESENT);
+            registerReceiver(wakeReceiver, wf);
+        } catch (Throwable ignored) {}
+        // Saludo automático al arranque/despertar (una vez)
+        try { maybeSpeakBootGreeting("start"); } catch (Throwable ignored) {}
 
         applyTheme();
         applyAccent();
@@ -349,6 +374,15 @@ public class Main extends Activity {
             carImageView.setImageBitmap(photo);
             carImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
             place(card, carImageView, 18, 78, 264, 160);
+            carImageView.setClickable(true);
+            carImageView.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    // Toque rápido: alternar foto día/noche manualmente (útil si la radio no reporta ILL)
+                    boolean curNight = prefs.getBoolean("headlight_night_active", false);
+                    prefs.edit().putBoolean("headlight_night_active", !curNight).apply();
+                    if (carCardContainer != null) refreshCarPhotoInCard(carCardContainer);
+                }
+            });
             carImageView.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View v) {
                     boolean curNight = prefs.getBoolean("headlight_night_active", false);
@@ -385,9 +419,14 @@ public class Main extends Activity {
             if (brightness == lastBrightness) return;
             lastBrightness = brightness;
 
-            boolean isNight = brightness >= 25;
-            boolean wasNight = prefs.getBoolean("headlight_night_active", false);
+            // Solo usar brillo como señal cuando es extremo; en muchas radios AC8227L/HCN
+            // el brillo se mantiene constante (p.ej. 30) y no refleja el estado de las luces.
+            boolean isNight;
+            if (brightness <= 8) isNight = true;
+            else if (brightness >= 200) isNight = false;
+            else return; // rango ambiguo: no cambiar estado
 
+            boolean wasNight = prefs.getBoolean("headlight_night_active", false);
             if (isNight != wasNight) {
                 prefs.edit().putBoolean("headlight_night_active", isNight).apply();
                 if (carCardContainer != null) {
@@ -401,18 +440,40 @@ public class Main extends Activity {
         public void onReceive(Context c, Intent intent) {
             if (intent == null || intent.getAction() == null) return;
             String action = intent.getAction();
-            if ("com.zjinnova.zlink.action.OUT_DARK_STOP".equals(action) || "autochips.intent.action.HEADLIGHT_ON".equals(action)) {
-                prefs.edit().putBoolean("headlight_night_active", true).apply();
-                if (carCardContainer != null) {
-                    refreshCarPhotoInCard(carCardContainer);
-                }
-            } else if ("com.zjinnova.zlink.action.OUT_DARK_START".equals(action) || "autochips.intent.action.HEADLIGHT_OFF".equals(action)) {
-                prefs.edit().putBoolean("headlight_night_active", false).apply();
-                if (carCardContainer != null) {
-                    refreshCarPhotoInCard(carCardContainer);
-                }
+            boolean nightMode = false;
+
+            if ("com.zjinnova.zlink.action.OUT_DARK_STOP".equals(action)
+                    || "autochips.intent.action.HEADLIGHT_ON".equals(action)
+                    || "android.intent.action.HEADLIGHT_ON".equals(action)
+                    || "com.hcn.autocan.action.HEADLIGHT_ON".equals(action)
+                    || "com.hcn.intent.action.HEADLIGHT_ON".equals(action)) {
+                nightMode = true;
+            } else if ("com.zjinnova.zlink.action.OUT_DARK_START".equals(action)
+                    || "autochips.intent.action.HEADLIGHT_OFF".equals(action)
+                    || "android.intent.action.HEADLIGHT_OFF".equals(action)
+                    || "com.hcn.autocan.action.HEADLIGHT_OFF".equals(action)
+                    || "com.hcn.intent.action.HEADLIGHT_OFF".equals(action)) {
+                nightMode = false;
             } else if ("android.intent.action.CONFIGURATION_CHANGED".equals(action)) {
+                // Sincronizar con modo noche de UI si el sistema lo cambia (ILL/tema HCN)
+                try {
+                    int night = getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+                    boolean isNight = (night == android.content.res.Configuration.UI_MODE_NIGHT_YES);
+                    boolean wasNight = prefs.getBoolean("headlight_night_active", false);
+                    if (isNight != wasNight) {
+                        prefs.edit().putBoolean("headlight_night_active", isNight).apply();
+                        if (carCardContainer != null) refreshCarPhotoInCard(carCardContainer);
+                    }
+                } catch (Throwable ignored) {}
                 checkBrightnessAndSwitch();
+                return;
+            } else {
+                return;
+            }
+
+            prefs.edit().putBoolean("headlight_night_active", nightMode).apply();
+            if (carCardContainer != null) {
+                refreshCarPhotoInCard(carCardContainer);
             }
         }
     };
@@ -529,6 +590,7 @@ public class Main extends Activity {
         modoConversacionActivo = false;
         h.removeCallbacks(fabReescuchar);
         try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
+        try { unregisterReceiver(wakeReceiver); } catch (Throwable ignored) {}
         super.onDestroy();
     }
 
@@ -555,6 +617,7 @@ public class Main extends Activity {
         h.post(progressTick);
         applyAaNotif(NotifArt.lastArt, NotifArt.lastTexts);
         try { if (parked != null) parked.onResume(); } catch (Throwable ignored) {}
+        try { maybeSpeakBootGreeting("resume"); } catch (Throwable ignored) {}
     }
 
     /** Android 6+: respuesta a la solicitud de permisos. */
@@ -790,6 +853,70 @@ public class Main extends Activity {
     private com.fordlauncher.launcher.obd.VoiceInputManager fabVoice;
     private boolean fabEscuchando;
     private boolean fabMicPending;
+
+    // Saludo automático al encender/despertar (ACC)
+    private static volatile boolean bootGreetingDoneThisProcess;
+    private long screenOffAtMs = 0L;
+    private final BroadcastReceiver wakeReceiver = new BroadcastReceiver() {
+        public void onReceive(Context c, Intent intent) {
+            if (intent == null || intent.getAction() == null) return;
+            String a = intent.getAction();
+            if (Intent.ACTION_SCREEN_OFF.equals(a)) {
+                screenOffAtMs = System.currentTimeMillis();
+            } else if (Intent.ACTION_SCREEN_ON.equals(a) || Intent.ACTION_USER_PRESENT.equals(a)) {
+                long offDur = screenOffAtMs > 0 ? (System.currentTimeMillis() - screenOffAtMs) : Long.MAX_VALUE;
+                screenOffAtMs = 0L;
+                if (offDur >= 15000 || prefs.getBoolean("pending_boot_greeting", false)) {
+                    maybeSpeakBootGreeting("wake");
+                }
+            }
+        }
+    };
+
+    private void maybeSpeakBootGreeting(String reason) {
+        try {
+            if (prefs == null) { android.util.Log.i("FordLauncher/Greet", "skip: prefs null"); return; }
+            long now = System.currentTimeMillis();
+            boolean pending = prefs.getBoolean("pending_boot_greeting", false);
+            long last = prefs.getLong("last_boot_greeting_ms", 0L);
+
+            // Evitar duplicados en la misma sesión/proceso o saludos muy seguidos,
+            // pero permitir saludo si hay un arranque/despertar pendiente.
+            if (!pending) {
+                if (bootGreetingDoneThisProcess) { android.util.Log.i("FordLauncher/Greet", "skip: done this process"); return; }
+                if (now - last < 120000L) { android.util.Log.i("FordLauncher/Greet", "skip: recent " + (now-last)); return; }
+                // En inicio normal sin señal de boot, saludar solo la primera vez del proceso
+                if (!"start".equals(reason)) { android.util.Log.i("FordLauncher/Greet", "skip: reason=" + reason); return; }
+            } else {
+                if (now - last < 30000L) { // ya saludamos recién
+                    prefs.edit().putBoolean("pending_boot_greeting", false).apply();
+                    bootGreetingDoneThisProcess = true;
+                    android.util.Log.i("FordLauncher/Greet", "skip: pending but recent");
+                    return;
+                }
+            }
+            android.util.Log.i("FordLauncher/Greet", "speaking greeting, reason=" + reason + " pending=" + pending);
+
+            String nombre = prefs.getString("user_name", "");
+            int hr = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+            String momento = (hr >= 5 && hr < 12) ? "Buenos días" : (hr >= 12 && hr < 19) ? "Buenas tardes" : "Buenas noches";
+            String saludo = (nombre != null && nombre.trim().length() > 0)
+                    ? (momento + ", " + nombre.trim() + ". Estoy listo para ayudarte.")
+                    : (momento + ". Estoy listo para ayudarte.");
+
+            bootGreetingDoneThisProcess = true;
+            prefs.edit().putBoolean("pending_boot_greeting", false).putLong("last_boot_greeting_ms", now).apply();
+
+            // Emitir con un pequeño retraso para que TTS/servicios estén listos
+            h.postDelayed(new Runnable() {
+                public void run() {
+                    try {
+                        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(saludo);
+                    } catch (Throwable ignored) {}
+                }
+            }, pending ? 2500 : 3500);
+        } catch (Throwable ignored) {}
+    }
     private boolean fabSilencio;
     private boolean modoConversacionActivo;
     private boolean fabTtsEnCurso;
