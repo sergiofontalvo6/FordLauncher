@@ -610,17 +610,20 @@ public class TelefonoView {
     // ---------- llamadas ----------
     private void toast(String m) { try { android.widget.Toast.makeText(host, m, android.widget.Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {} }
 
-    /** Marcar por HFP real (BluetoothHeadsetClient), la vía del radio. */
-    void callNumber(String number) {
-        if (number == null) return;
+    /** Marcar por HFP real (BluetoothHeadsetClient), la vía del radio. Devuelve false si no se pudo. */
+    boolean callNumber(String number) {
+        if (number == null) return false;
         String n = cleanNumber(number);
-        if (n == null) { toast("Número vacío"); return; }
-        if (hfp == null) { toast("Bluetooth no disponible"); return; }
+        if (n == null) { toast("Número vacío"); return false; }
+        if (hfp == null) { toast("Bluetooth no disponible"); return false; }
         // HfpClient comprueba el dispositivo conectado y avisa por
         // onDialResult (estado + toast) si el celular no está conectado.
+        // Si el proxy HFP aún está conectando, la llamada queda en espera y se
+        // marca sola: así el primer intento por voz no se pierde.
         hfp.dial(n);
         // Interfaz propia de llamada desde el primer momento (no esperar al evento HFP).
         try { host.callWindow().show(n, null, 2); } catch (Throwable ignored) {}
+        return true;
     }
 
     private static String cleanNumber(String n) {
@@ -1236,6 +1239,36 @@ public class TelefonoView {
             }
         } catch (Throwable ignored) { }
         try { if (cst != null) cst.close(); } catch (Throwable ignored) {}
+
+        // Nombre estructurado (GIVEN_NAME + FAMILY_NAME): es la forma fiable de
+        // mostrar «Nombre Apellido» aunque el DISPLAY_NAME venga como «Apellido, Nombre».
+        Map<Long, String> structured = new HashMap<Long, String>();
+        Cursor csn = null;
+        try {
+            csn = host.getContentResolver().query(ContactsContract.Data.CONTENT_URI,
+                    new String[]{
+                            ContactsContract.Data.CONTACT_ID,
+                            ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
+                            ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME
+                    },
+                    ContactsContract.Data.MIMETYPE + "=?",
+                    new String[]{ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE},
+                    null);
+            if (csn != null) {
+                int ic = csn.getColumnIndex(ContactsContract.Data.CONTACT_ID);
+                int ig = csn.getColumnIndex(ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME);
+                int iff = csn.getColumnIndex(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME);
+                while (csn.moveToNext()) {
+                    long id = ic >= 0 ? csn.getLong(ic) : -1;
+                    String g = ig >= 0 ? csn.getString(ig) : null;
+                    String f = iff >= 0 ? csn.getString(iff) : null;
+                    String full = com.fordlauncher.launcher.ai.ContactNames.unir(g, f);
+                    if (id >= 0 && full.length() > 0) structured.put(id, full);
+                }
+            }
+        } catch (Throwable ignored) { }
+        try { if (csn != null) csn.close(); } catch (Throwable ignored) {}
+
         Cursor c = null;
         try {
             c = host.getContentResolver().query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
@@ -1248,10 +1281,14 @@ public class TelefonoView {
             if (c != null) while (c.moveToNext()) {
                 Contact ct = new Contact();
                 try { ct.key = String.valueOf(c.getLong(0)); } catch (Throwable ignored) { ct.key = ""; }
-                ct.name = safe(c.getString(1), "Desconocido");
-                ct.number = safe(c.getString(2), "");
                 long contactId = -1;
                 try { contactId = c.getLong(3); } catch (Throwable ignored) { }
+                String nombre = contactId >= 0 ? structured.get(contactId) : null;
+                if (nombre == null || nombre.length() == 0) {
+                    nombre = com.fordlauncher.launcher.ai.ContactNames.formatear(c.getString(1));
+                }
+                ct.name = safe(nombre, "Desconocido");
+                ct.number = safe(c.getString(2), "");
                 ct.contactId = contactId;
                 ct.photoUri = contactId >= 0 ? thumbMap.get(contactId) : null;
                 if (ct.name.length() > 0 && ct.number.length() > 0) out.add(ct);
@@ -1268,7 +1305,7 @@ public class TelefonoView {
                     org.json.JSONObject o = arr.getJSONObject(i);
                     Contact ct = new Contact();
                     ct.key = o.optString("key", "");
-                    ct.name = o.optString("name", "Desconocido");
+                    ct.name = com.fordlauncher.launcher.ai.ContactNames.formatear(o.optString("name", "Desconocido"));
                     ct.number = o.optString("number", "");
                     if (ct.name.length() > 0 && ct.number.length() >= 7) out.add(ct);
                 }
@@ -1323,24 +1360,30 @@ public class TelefonoView {
         for (java.io.File f : files) {
             try {
                 java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f));
-                String line, name = null, number = null;
+                String line, fn = null, nField = null, number = null;
                 while ((line = br.readLine()) != null) {
                     line = line.trim();
-                    if (line.toUpperCase().startsWith("FN:")) name = line.substring(3).trim();
-                    else if (line.toUpperCase().startsWith("TEL")) {
+                    String up = line.toUpperCase(java.util.Locale.ROOT);
+                    if (up.startsWith("FN:")) fn = line.substring(3).trim();
+                    else if (up.startsWith("N:") || up.startsWith("N;")) {
+                        int c = line.indexOf(':');
+                        if (c >= 0) nField = line.substring(c + 1).trim();
+                    } else if (up.startsWith("TEL")) {
                         int idx = line.indexOf(':');
                         if (idx >= 0) number = line.substring(idx + 1).trim().replaceAll("[^0-9+]", "");
-                    } else if (line.equalsIgnoreCase("END:VCARD")) {
-                        if (name != null && number != null && number.length() >= 7) {
+                    } else if (up.equals("END:VCARD")) {
+                        String nombre = fn != null ? com.fordlauncher.launcher.ai.ContactNames.formatear(fn)
+                                : (nField != null ? com.fordlauncher.launcher.ai.ContactNames.formatear(nField) : null);
+                        if (nombre != null && nombre.length() > 0 && number != null && number.length() >= 7) {
                             Contact ct = new Contact();
                             ct.key = "vcf_" + number;
-                            ct.name = name;
+                            ct.name = nombre;
                             ct.number = number;
                             ct.starred = favs.contains(ct.key);
                             imported.add(ct);
                             added++;
                         }
-                        name = null; number = null;
+                        fn = null; nField = null; number = null;
                     }
                 }
                 br.close();
@@ -1456,7 +1499,11 @@ public class TelefonoView {
                     new String[]{ContactsContract.PhoneLookup.DISPLAY_NAME}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 String name = c.getString(0);
-                if (name != null) { nameCache.put(n, name); return name; }
+                if (name != null) {
+                    name = com.fordlauncher.launcher.ai.ContactNames.formatear(name);
+                    nameCache.put(n, name);
+                    return name;
+                }
             }
         } catch (Throwable ignored) { }
         try { if (c != null) c.close(); } catch (Throwable ignored) {}
@@ -1492,7 +1539,17 @@ public class TelefonoView {
                 r.date = parseBtTime(when);
                 String dn = null;
                 try { dn = c.getString(1); } catch (Throwable ignored) {}
-                r.name = (dn != null && dn.length() > 0 && !"NULL".equalsIgnoreCase(dn)) ? dn : lookupName(r.number);
+                // El historial Bluetooth concatena «ApellidoNombre» sin espacio
+                // («CamposFernanda»). Se prefiere el nombre real de la agenda y, si no
+                // está, se separa y reordena a «Nombre Apellido».
+                String looked = lookupName(r.number);
+                if (looked != null && looked.length() > 0) {
+                    r.name = looked;
+                } else if (dn != null && dn.length() > 0 && !"NULL".equalsIgnoreCase(dn)) {
+                    r.name = com.fordlauncher.launcher.ai.ContactNames.desconcatenar(dn);
+                } else {
+                    r.name = null;
+                }
                 r.known = r.name != null;
                 String key = cleanNumber(r.number) + "|" + (r.date / 60000L);
                 if (!seen.containsKey(key)) {
@@ -1524,7 +1581,14 @@ public class TelefonoView {
                 try { r.type = c.getInt(2); } catch (Throwable ignored) { r.type = 0; }
                 try { r.date = c.getLong(3); } catch (Throwable ignored) { r.date = 0; }
                 try { r.duration = c.getLong(4); } catch (Throwable ignored) { r.duration = 0; }
-                r.name = (cached != null && cached.length() > 0) ? cached : lookupName(r.number);
+                String looked = lookupName(r.number);
+                if (looked != null && looked.length() > 0) {
+                    r.name = looked;
+                } else if (cached != null && cached.length() > 0) {
+                    r.name = com.fordlauncher.launcher.ai.ContactNames.desconcatenar(cached);
+                } else {
+                    r.name = null;
+                }
                 r.known = r.name != null;
                 String key = cleanNumber(r.number) + "|" + (r.date / 60000L);
                 if (!seen.containsKey(key)) {

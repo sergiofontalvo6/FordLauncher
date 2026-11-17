@@ -23,5 +23,11 @@ public class BootReceiver extends BroadcastReceiver {
                 prefs.edit().putBoolean("pending_boot_greeting", true).apply();
             }
         } catch (Throwable ignored) {}
+        // El servicio OBD en primer plano arranca con el sistema y mantiene el
+        // ELM327 leyendo aunque el launcher no esté visible. El repositorio
+        // aplica su propio retardo de estabilización Bluetooth de 8 s.
+        try {
+            com.fordlauncher.launcher.obd.ObdForegroundService.start(context);
+        } catch (Throwable ignored) {}
     }
 }

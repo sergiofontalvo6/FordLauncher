@@ -9,11 +9,28 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Habla con un ELM327 (y clones): manda un comando, lee hasta ">" y deja la
- * respuesta limpia (sin eco, espacios ni SEARCHING...).
- * Port fiel de feature/obd/Elm327.kt de LiteDash (Kotlin -> Java).
+ * Habla con un ELM327 (y clones): manda un comando, lee estrictamente hasta el
+ * prompt '>' y deja la respuesta limpia (sin eco, espacios ni SEARCHING...).
+ *
+ * Estilo Car Scanner: un único comando en vuelo, pausa de 50-80 ms entre
+ * comandos y timeout por comando de 1500 ms. Un timeout aislado se puede
+ * tolerar; un cierre real se reporta con {@link ElmClosedException}.
  */
 public class Elm327 {
+    private static final long DEFAULT_TIMEOUT_MS = 1500;
+    private static final int PAUSA_MIN_MS = 50;
+    private static final int PAUSA_MAX_MS = 80;
+
+    /** El adaptador no respondió dentro del tiempo esperado (timeout aislado). */
+    public static class ElmTimeoutException extends IOException {
+        public ElmTimeoutException(String m) { super(m); }
+    }
+
+    /** El socket se cerró o la lectura devolvió -1: caída real. */
+    public static class ElmClosedException extends IOException {
+        public ElmClosedException(String m) { super(m); }
+    }
+
     private final ElmLink link;
     private final LongSupplier clock;
 
@@ -22,29 +39,44 @@ public class Elm327 {
     public Elm327(ElmLink link) { this(link, new LongSupplier(){ public long get(){ return System.currentTimeMillis(); } }); }
     public Elm327(ElmLink link, LongSupplier clock) { this.link = link; this.clock = clock; }
 
-    public List<String> command(String cmd) throws IOException { return command(cmd, 3000); }
+    public List<String> command(String cmd) throws IOException { return command(cmd, DEFAULT_TIMEOUT_MS); }
 
     public List<String> command(String cmd, long timeoutMs) throws IOException {
+        // Vaciar cualquier resto de una respuesta anterior antes de escribir.
         try {
             while (link.getInput().available() > 0) link.getInput().read();
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            throw new ElmClosedException("Se cerro la conexion");
+        }
         link.getOutput().write((cmd + "\r").getBytes());
         link.getOutput().flush();
         StringBuilder text = new StringBuilder();
         long deadline = clock.get() + timeoutMs;
         while (true) {
             int avail;
-            try { avail = link.getInput().available(); } catch (IOException e) { throw e; }
+            try {
+                avail = link.getInput().available();
+            } catch (IOException e) {
+                throw new ElmClosedException("Se cerro la conexion");
+            }
             if (avail == 0) {
-                if (clock.get() > deadline) throw new IOException("El adaptador no respondio a " + cmd);
-                try { Thread.sleep(5); } catch (InterruptedException ignored) {}
+                if (clock.get() > deadline) {
+                    throw new ElmTimeoutException("El adaptador no respondio a " + cmd);
+                }
+                try {
+                    Thread.sleep(5);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new ElmClosedException("Lectura interrumpida");
+                }
                 continue;
             }
             int b = link.getInput().read();
-            if (b < 0) throw new IOException("Se cerro la conexion");
-            if ((char) b == '>') break;
+            if (b < 0) throw new ElmClosedException("Se cerro la conexion");
+            if ((char) b == '>') break; // prompt del ELM327: respuesta completa
             text.append((char) b);
         }
+        pausaEntreComandos();
         List<String> out = new ArrayList<String>();
         String cmdClean = cmd.replace(" ", "").toUpperCase();
         for (String line : text.toString().split("[\\r\\n]+")) {
@@ -58,20 +90,61 @@ public class Elm327 {
         return out;
     }
 
+    /** Pausa mínima entre comandos para no desbordar el buffer del clon ELM327. */
+    private void pausaEntreComandos() {
+        try {
+            int extra = PAUSA_MIN_MS + (int) (Math.random() * (PAUSA_MAX_MS - PAUSA_MIN_MS + 1));
+            Thread.sleep(extra);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     public String init() throws IOException {
         String version = "";
         try {
             List<String> v = command("ATZ", 4000);
             if (!v.isEmpty()) version = v.get(v.size()-1).replace("ELM327V", "ELM327 v");
-        } catch (Exception ignored) {}
-        for (String c : new String[]{"ATE0","ATL0","ATS0","ATH0","ATAT1","ATSP0"}) {
-            try { command(c); } catch (Exception ignored) {}
+        } catch (ElmTimeoutException ignored) {
+            // Algunos clones no contestan ATZ pero sí el resto.
         }
-        List<String> probe = command("0100", 10000);
+        for (String c : new String[]{"ATE0","ATL0","ATS0","ATH0","ATAT1","ATST1E"}) {
+            try {
+                command(c);
+            } catch (ElmTimeoutException ignored) {
+                // Comando AT no crítico: seguimos.
+            }
+        }
+        // Ford Fiesta 2011: ISO 15765-4 CAN 11-bit 500 kbps.
         boolean ok = false;
-        for (String l : probe) if (l.contains("4100")) { ok = true; break; }
-        if (!ok) throw new IOException(probe.isEmpty() ? "Sin respuesta del auto" : probe.get(0));
+        try {
+            command("ATSP6");
+            ok = probe0100();
+        } catch (ElmTimeoutException ignored) {
+            ok = false;
+        }
+        if (!ok) {
+            // Fallback solo si 0100 falla con el protocolo fijo.
+            try {
+                command("ATSP0");
+                ok = probe0100();
+            } catch (ElmTimeoutException ignored) {
+                ok = false;
+            }
+        }
+        if (!ok) throw new IOException("Sin respuesta del auto");
         return version;
+    }
+
+    private boolean probe0100() throws IOException {
+        List<String> probe;
+        try {
+            probe = command("0100", 6000);
+        } catch (ElmTimeoutException te) {
+            return false;
+        }
+        for (String l : probe) if (l.contains("4100")) return true;
+        return false;
     }
 
     public int[] pid(int pid) throws IOException {
@@ -104,7 +177,11 @@ public class Elm327 {
         int base = 0x00;
         while (base <= 0xA0) {
             int[] bits;
-            try { bits = pid(base); } catch (IOException e) { break; }
+            try {
+                bits = pid(base);
+            } catch (ElmTimeoutException e) {
+                break; // un timeout de sondeo no invalida la conexión
+            }
             if (bits == null) break;
             for (int i = 0; i < 32; i++) {
                 int b = i / 8 < bits.length ? bits[i / 8] : 0;

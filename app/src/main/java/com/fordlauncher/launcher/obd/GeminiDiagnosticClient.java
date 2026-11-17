@@ -152,6 +152,40 @@ public class GeminiDiagnosticClient {
         return "Acción ejecutada.";
     }
 
+    /**
+     * Extrae el texto hablado limpio (sin JSON de acción, fences de código ni markdown)
+     * para que el TTS nunca tenga que leer crudo {"action":...,"speech":...}.
+     * Si la respuesta es JSON de acción, devuelve el campo "speech" (texto natural).
+     */
+    public static String limpiarParaVoz(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.length() == 0) return null;
+        if (t.startsWith("```")) {
+            int nl = t.indexOf('\n');
+            if (nl >= 0) t = t.substring(nl + 1).trim();
+            int fence = t.lastIndexOf("```");
+            if (fence >= 0) t = t.substring(0, fence).trim();
+        }
+        if (t.contains("\"action\"")) {
+            int sp = t.indexOf("\"speech\"");
+            if (sp >= 0) {
+                int colon = t.indexOf(':', sp);
+                int q1 = t.indexOf('"', colon + 1);
+                if (q1 >= 0) {
+                    int q2 = t.indexOf('"', q1 + 1);
+                    if (q2 > q1) {
+                        String s = t.substring(q1 + 1, q2).trim();
+                        if (s.length() > 0) return s;
+                    }
+                }
+            }
+            return "Acción ejecutada.";
+        }
+        String out = t.replaceAll("(?m)^\\s*([-*]|\\d+[.)])\\s+", "").replaceAll("\\*\\*+", "").trim();
+        return out.length() > 0 ? out : null;
+    }
+
     private static String systemPrompt(String userName, String carName, boolean primera, boolean obdConectado) {
         String nombre = userName.length() > 0 ? userName : "amigo";
         String vehiculo = carName.length() > 0 ? carName : "Ford Fiesta";
@@ -180,6 +214,13 @@ public class GeminiDiagnosticClient {
                 + "{\"action\":\"PLAY_MUSIC\",\"query\":\"nombre canción o artista\",\"speech\":\"Poniendo canción en Seldia Music\"}. "
                 + "Si pide llamar o marcar a alguien por nombre o número, responde ÚNICAMENTE con este JSON sin markdown ni texto adicional: "
                 + "{\"action\":\"MAKE_CALL\",\"target\":\"nombre_o_numero\",\"speech\":\"Llamando a nombre o número\"}. "
+                + "Si pide abrir un botón del menú inferior (Radio, Bluetooth, Música, Teléfono, Apps, Navegador, Archivos, Diagnóstico, Ajustes), "
+                + "responde ÚNICAMENTE con este JSON: "
+                + "{\"action\":\"OPEN_DOCK\",\"query\":\"nombre del botón\",\"speech\":\"Abriendo nombre\"}. "
+                + "Si pide abrir el Diagnóstico o una de sus pestañas (Salud, Códigos de falla, Sensores, Gráficas, Más), responde ÚNICAMENTE con este JSON: "
+                + "{\"action\":\"OPEN_DIAGNOSTIC\",\"query\":\"pestaña o vacío\",\"speech\":\"Abriendo Diagnóstico\"}. "
+                + "Si pide analizar con IA, analizar los datos o hacer un diagnóstico inteligente, responde ÚNICAMENTE con este JSON: "
+                + "{\"action\":\"ANALYZE_AI\",\"query\":\"pestaña o vacío\",\"speech\":\"Analizando con IA\"}. "
                 + "No uses estas acciones para preguntas ni conversación; para todo lo demás responde texto normal.";
     }
 
@@ -288,8 +329,10 @@ public class GeminiDiagnosticClient {
                     }
                     Log.i("FordLauncher/AI", "Gemini OK (" + text.length() + " chars)");
                     String limpio = primera ? text.trim() : quitarSaludo(text, userName);
-                    registrarRespuesta(ctx, userText, limpio);
-                    if (callback != null) callback.onDone(limpio, null);
+                    String paraVoz = limpiarParaVoz(limpio);
+                    if (paraVoz == null) paraVoz = "No pude generar una respuesta.";
+                    registrarRespuesta(ctx, userText, paraVoz);
+                    if (callback != null) callback.onDone(paraVoz, null);
                 } catch (Throwable e) {
                     if (callback != null) callback.onDone(null, ERR_CONN);
                 }

@@ -75,7 +75,7 @@ public class ParkedModeManager {
     public float currentSpeedKmh() {
         try {
             com.fordlauncher.launcher.obd.ObdRepository repo = host.getObdRepo();
-            if (repo != null && repo.getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON) {
+            if (repo != null && repo.isConnected()) {
                 Map<String, Float> v = repo.getValues();
                 if (v != null) {
                     Float spd = v.get(Pids.SPEED);

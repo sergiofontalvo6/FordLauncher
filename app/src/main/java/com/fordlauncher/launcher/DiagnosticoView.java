@@ -63,6 +63,7 @@ public class DiagnosticoView {
     private Health.EngineReport report;
     private boolean reading;
     private boolean readingBg;
+    private ObdRepository.Listener repoListener;
 
     private LinearLayout root;
     private LinearLayout tabBar;
@@ -126,6 +127,8 @@ public class DiagnosticoView {
     private String lastAiText;
     private final java.util.Map<String, String> aiLastByMode = new java.util.LinkedHashMap<String, String>();
     private boolean aiBusy;
+    /** Tarea de IA de la pestaña actual (la usa el control por voz «analizar»). */
+    private String currentAiTask = AI_TASK_DEFAULT;
 
     /** Rangos normales/anormales de referencia por seÃ±al (Ford Fiesta, motor 1.6). */
     private static String refFor(String sig) {
@@ -225,14 +228,15 @@ public class DiagnosticoView {
             } }); }
         };
         TextToSpeechManager.getInstance(host).addListener(ttsListener);
-        repo.setListener(new ObdRepository.Listener(){
+        repoListener = new ObdRepository.Listener(){
             public void onState(ObdRepository.State st, String err) {
                 ui.post(new Runnable(){ public void run(){ render(); } });
             }
             public void onValues(Map<String,Float> v) {
                 ui.post(new Runnable(){ public void run(){ refreshLive(); } });
             }
-        });
+        };
+        repo.addListener(repoListener);
         render();
         return root;
     }
@@ -249,7 +253,9 @@ public class DiagnosticoView {
         carView = null;
         aiResult = null; aiStatus = null; aiAnalyzeBtn = null; aiSpeakBtn = null;
         monochrome();
-        boolean on = repo.getState() == ObdRepository.State.ON;
+        // Estado unificado: durante una reconexión con telemetría reciente
+        // (<12 s) se pinta al instante sin mostrar "Conectando...".
+        boolean on = repo.isConnected();
         tabBar.setVisibility(on ? View.VISIBLE : View.GONE);
         if (!on) {
             buildHealthCard(content, false);
@@ -492,7 +498,7 @@ public class DiagnosticoView {
     }
 
     private void refreshHealth() {
-        boolean connected = repo.getState() == ObdRepository.State.ON;
+        boolean connected = repo.isConnected();
         if (summaryBig == null) return;
         List<Health.SystemHealth> hs = computeHealth(connected);
         lastHealth = hs;
@@ -606,6 +612,7 @@ public class DiagnosticoView {
     }
 
     private void buildAiCard(LinearLayout col, final String task) {
+        currentAiTask = task;
         LinearLayout card = card(col, null);
         // Cabecera: título a la izquierda, botones pequeños a la derecha (fijos, encima del texto).
         LinearLayout head = new LinearLayout(host);
@@ -801,10 +808,17 @@ public class DiagnosticoView {
     private void micQuestion(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) return;
         if (voiceInput != null) { /* libera el recognizer tras cada consulta */ }
-        // Validación local: consulta del vehículo con escáner desconectado no gasta tokens.
+        // Validación local con estado unificado: si está reconectando, espera
+        // hasta 2.5 s o usa la última lectura reciente (<20 s).
         boolean conectado = false;
-        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
-        if (VehicleIntent.requiereVehiculo(pregunta) && !conectado) {
+        boolean requiereVehiculo = VehicleIntent.requiereVehiculo(pregunta);
+        try {
+            conectado = repo.isConnected() || repo.hasRecentValues(20000);
+            if (!conectado && requiereVehiculo && repo.isConnecting()) {
+                conectado = repo.esperarConexion(2500) || repo.hasRecentValues(20000);
+            }
+        } catch (Throwable ignored) {}
+        if (requiereVehiculo && !conectado) {
             final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
             lastAiText = aviso;
             if (aiStatus != null) { aiStatus.setText("Escáner OBD2 desconectado"); aiStatus.setVisibility(View.VISIBLE); }
@@ -967,8 +981,11 @@ public class DiagnosticoView {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
         boolean conectado = false;
-        try { conectado = repo.isConnected(); } catch (Throwable ignored) {}
-        sb.append("\"obd_conectado\":").append(conectado).append(",\"dtc_stored\":"); appendCodeArray(sb, r != null ? r.stored : null);
+        try { conectado = repo.isConnected() || repo.hasRecentValues(20000); } catch (Throwable ignored) {}
+        sb.append("\"obd_conectado\":").append(conectado)
+          .append(",\"obd_estado\":\"").append(repo.getLinkState().name()).append("\"")
+          .append(",\"obd_reciente\":").append(repo.hasRecentValues(20000))
+          .append(",\"dtc_stored\":"); appendCodeArray(sb, r != null ? r.stored : null);
         sb.append(",\"dtc_pending\":"); appendCodeArray(sb, r != null ? r.pending : null);
         sb.append(",\"dtc_permanent\":"); appendCodeArray(sb, r != null ? r.permanent : null);
         sb.append(",\"mil\":"); sb.append(r != null && r.readiness != null && r.readiness.mil ? "true" : "false");
@@ -1019,6 +1036,8 @@ public class DiagnosticoView {
     }
 
     public void onDestroy() {
+        try { if (repoListener != null) repo.removeListener(repoListener); } catch (Throwable ignored) {}
+        repoListener = null;
         try { if (ttsListener != null) TextToSpeechManager.getInstance(host).removeListener(ttsListener); } catch (Throwable ignored) {}
         ttsListener = null;
         try { if (speaker != null) speaker.shutdown(); } catch (Throwable ignored) {}
@@ -1497,18 +1516,19 @@ public class DiagnosticoView {
     private void refreshAdapter() {
         if (adapterStatus == null) return;
         ObdRepository.State st = repo.getState();
+        boolean enlace = repo.isConnected();
         String status;
         int color;
-        if (st == ObdRepository.State.OFF) { status = "Sin adaptador"; color = MUTED(); }
+        if (enlace) { status = "Conectado al ELM327" + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " · " + repo.getAdapter() : ""); color = GOOD; }
         else if (st == ObdRepository.State.CONNECTING) { status = "Conectando al ELM327…"; color = TEXT(); }
-        else if (st == ObdRepository.State.ON) { status = "Conectado al ELM327" + (repo.getAdapter() != null && repo.getAdapter().length() > 0 ? " · " + repo.getAdapter() : ""); color = GOOD; }
+        else if (st == ObdRepository.State.OFF) { status = "Sin adaptador"; color = MUTED(); }
         else { status = "Error: " + (repo.getError() != null ? repo.getError() : "sin respuesta"); color = DANGER; }
         adapterStatus.setText(status);
         adapterStatus.setTextColor(color);
         if (st == lastAdapterBuilt) return;
         lastAdapterState = st; lastAdapterBuilt = st;
         adapterBtns.removeAllViews();
-        if (st == ObdRepository.State.ON || st == ObdRepository.State.CONNECTING) {
+        if (enlace || st == ObdRepository.State.CONNECTING) {
             button(adapterBtns, "Desconectar", false, new Runnable(){ public void run(){ repo.disconnect(); } });
             button(adapterBtns, "Usar otro", false, new Runnable(){ public void run(){ repo.disconnect(); showPairedDialog(); } });
         } else {
@@ -1848,6 +1868,43 @@ public class DiagnosticoView {
                 c.drawLine(x, 0, x, h, cur);
             }
         }
+    }
+
+    // ─────────── control externo (voz): pestañas y análisis ───────────
+
+    /** Cambia a una pestaña (0..4) y vuelve a dibujar. */
+    public void setTab(int idx) {
+        if (idx < 0 || idx > 4) return;
+        android.util.Log.i("FordLauncher/Diag", "setTab " + idx);
+        currentTab = idx;
+        try { host.getPrefs().edit().putInt("workshop_tab", idx).apply(); } catch (Throwable ignored) {}
+        render();
+    }
+
+    /** Lanza «Analizar con IA» con la tarea de la pestaña visible. */
+    public void analizarConIa() {
+        if (root == null) return;
+        String task = currentAiTask != null ? currentAiTask : AI_TASK_DEFAULT;
+        android.util.Log.i("FordLauncher/Diag", "analizarConIa task=\"" + task + "\"");
+        runAiAnalyze(task);
+    }
+
+    /** Reconoce una pestaña por nombre dictado. Devuelve -1 si no coincide. */
+    public static int pestanaDe(String texto) {
+        if (texto == null) return -1;
+        String n = com.fordlauncher.launcher.ai.ContactNames.norm(texto);
+        if (n.length() == 0) return -1;
+        String[] tok = n.split(" ");
+        for (String t : tok) {
+            if (t.equals("salud") || t.equals("estado")) return 0;
+            if (t.equals("codigos") || t.equals("codigo") || t.equals("fallas") || t.equals("falla")
+                    || t.equals("dtc") || t.equals("errores") || t.equals("error")) return 1;
+            if (t.equals("sensores") || t.equals("sensor") || t.equals("lecturas")) return 2;
+            if (t.equals("graficas") || t.equals("grafica") || t.equals("graficos") || t.equals("grafico")
+                    || t.equals("tendencias")) return 3;
+            if (t.equals("mas") || t.equals("adaptador") || t.equals("viajes") || t.equals("aceleracion")) return 4;
+        }
+        return -1;
     }
 
     // Queda para compatibilidad con codigo previo que llamaba a scanCodes().

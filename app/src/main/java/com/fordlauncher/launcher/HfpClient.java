@@ -65,6 +65,11 @@ final class HfpClient {
     private CallListener listener;
     private BroadcastReceiver receiver;
 
+    /** Llamada pedida antes de que el proxy HFP estuviera listo (se reintenta sola). */
+    private String pendingDial;
+    private Runnable pendingDialTimeout;
+    private int dialRetries;
+
     HfpClient(Context ctx) {
         appCtx = ctx.getApplicationContext();
         BluetoothAdapter a = null;
@@ -111,6 +116,15 @@ final class HfpClient {
                         Log.i(TAG, "HFP proxy conectado: " + proxy.getClass().getName());
                         refreshConnectedDevice();
                         registerReceiver();
+                        // Si había una llamada esperando a que el proxy estuviera listo,
+                        // se marca ahora (esto es lo que hacía fallar la primera llamada
+                        // por voz después de arrancar el launcher).
+                        if (pendingDial != null) {
+                            final String p = pendingDial;
+                            pendingDial = null;
+                            cancelPendingTimeout();
+                            ui.postDelayed(new Runnable() { @Override public void run() { dial(p); } }, 350);
+                        }
                         if (listener != null && connectedName != null) {
                             final String n = connectedName;
                             ui.post(new Runnable() { public void run() { listener.onConnectionChanged(n); } });
@@ -176,19 +190,38 @@ final class HfpClient {
             notifyDial(false, "HFP no disponible (Android < 7.0)");
             return;
         }
+        final String num = number.trim();
+
         if (headsetClient == null) {
+            // El proxy HFP tarda un momento en conectar (sobre todo al arrancar el
+            // launcher). En vez de abortar y perder la llamada, se encola y se marca
+            // en cuanto onServiceConnected lo confirme.
+            pendingDial = num;
             proxyRequested = false;
             requestProxy();
-            notifyDial(false, "Conectando perfil HFP… vuelve a tocar Llamar");
+            schedulePendingTimeout();
+            Log.i(TAG, "HFP conectando; llamada en espera: " + num);
             return;
         }
+
         refreshConnectedDevice();
         if (connectedDevice == null) {
+            // Algunos firmwares tardan en poblar getConnectedDevices(): un reintento corto.
+            if (dialRetries < 1) {
+                dialRetries++;
+                Log.i(TAG, "HFP sin dispositivo todavía; reintento");
+                ui.postDelayed(new Runnable() { @Override public void run() { dial(num); } }, 700);
+                return;
+            }
+            dialRetries = 0;
             notifyDial(false, "Celular no conectado por Bluetooth HFP. Conéctalo desde la app Bluetooth de fábrica y vuelve a intentar.");
             return;
         }
+        dialRetries = 0;
+        cancelPendingTimeout();
+        pendingDial = null;
+
         final BluetoothDevice dev = connectedDevice;
-        final String num = number.trim();
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -426,6 +459,9 @@ final class HfpClient {
     }
 
     void close() {
+        cancelPendingTimeout();
+        pendingDial = null;
+        dialRetries = 0;
         try { if (receiver != null) appCtx.unregisterReceiver(receiver); } catch (Throwable ignored) {}
         receiver = null;
         try {
@@ -435,6 +471,27 @@ final class HfpClient {
         } catch (Throwable ignored) {}
         headsetClient = null;
         proxyRequested = false;
+    }
+
+    private void schedulePendingTimeout() {
+        cancelPendingTimeout();
+        pendingDialTimeout = new Runnable() {
+            @Override public void run() {
+                if (pendingDial == null) return;
+                String p = pendingDial;
+                pendingDial = null;
+                Log.w(TAG, "timeout esperando HFP para " + p);
+                notifyDial(false, "No se pudo conectar el perfil HFP. Revisa el Bluetooth.");
+            }
+        };
+        ui.postDelayed(pendingDialTimeout, 10000);
+    }
+
+    private void cancelPendingTimeout() {
+        if (pendingDialTimeout != null) {
+            ui.removeCallbacks(pendingDialTimeout);
+            pendingDialTimeout = null;
+        }
     }
 
     private void notifyDial(final boolean ok, final String detail) {

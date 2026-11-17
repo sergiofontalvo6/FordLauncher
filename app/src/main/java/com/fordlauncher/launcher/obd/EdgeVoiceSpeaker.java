@@ -139,10 +139,27 @@ public class EdgeVoiceSpeaker {
                     return true;
                 }
             });
-            player.prepare();
-            player.start();
-            setSpeaking(true);
-            Log.w(TAG, "Edge play started (" + mp3File.length() + " bytes, voz=" + voiceName + ")");
+            final long bytes = mp3File.length();
+            final long genPlay = generation;
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                public void onPrepared(MediaPlayer mp) {
+                    if (genPlay != generation) {
+                        try { mp.release(); } catch (Throwable ignored) {}
+                        return;
+                    }
+                    try {
+                        mp.start();
+                        setSpeaking(true);
+                        Log.w(TAG, "Edge play started (" + bytes + " bytes, voz=" + voiceName + ")");
+                    } catch (Throwable e) {
+                        Log.w(TAG, "Edge play start error: " + e);
+                        finishPlay();
+                    }
+                }
+            });
+            // prepareAsync evita bloquear el hilo principal en el arranque
+            // (CPU saturada), que era lo que entrecortaba el saludo.
+            player.prepareAsync();
         } catch (Throwable e) {
             Log.w(TAG, "Edge play error: " + e);
             setSpeaking(false);

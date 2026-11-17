@@ -290,7 +290,10 @@ final class ThemedCallWindow {
             c = host.getContentResolver().query(
                     Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)),
                     new String[]{ContactsContract.PhoneLookup.DISPLAY_NAME}, null, null, null);
-            if (c != null && c.moveToFirst()) return c.getString(0);
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                return n == null ? null : com.fordlauncher.launcher.ai.ContactNames.formatear(n);
+            }
         } catch (Throwable ignored) {
         } finally {
             try { if (c != null) c.close(); } catch (Throwable ignored) {}

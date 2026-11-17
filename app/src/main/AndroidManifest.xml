@@ -42,6 +42,24 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST"/>
+                <action android:name="android.intent.action.VOICE_ASSIST"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.speech.action.WEB_SEARCH"/>
+                <action android:name="android.speech.action.VOICE_SEARCH_HANDS_FREE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.googlequicksearchbox.MUSIC_SEARCH"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
         <service android:name="com.fordlauncher.launcher.NotifArt" android:label="@string/acc_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -59,6 +77,13 @@
         <provider android:name="com.fordlauncher.launcher.ApkProvider" android:authorities="${applicationId}.apk"
             android:exported="false" android:grantUriPermissions="true"/>
         <service android:name="com.fordlauncher.launcher.LogcatRecorderService" android:exported="false"/>
+        <service android:name="com.fordlauncher.launcher.obd.ObdForegroundService"
+            android:exported="false" android:stopWithTask="false"/>
+        <receiver android:name="com.fordlauncher.launcher.DebugCommandReceiver" android:enabled="true" android:exported="true">
+            <intent-filter>
+                <action android:name="com.fordlauncher.launcher.DEBUG_CMD"/>
+            </intent-filter>
+        </receiver>
         <receiver android:name="com.fordlauncher.launcher.BootReceiver" android:enabled="true" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>

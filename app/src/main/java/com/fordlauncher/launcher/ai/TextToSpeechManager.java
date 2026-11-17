@@ -39,7 +39,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private static final String KEY_VOICE = "tts_voice";
     private static final String EDGE_PREFIX = "edge:";
     private static final String LAST_CHUNK = "last_chunk_";
-    private static final long INIT_TIMEOUT_MS = 8000L;
+    private static final long INIT_TIMEOUT_MS = 12000L;
     private static final float PITCH_LOCAL = 0.85f;
     private static final float RATE_LOCAL = 0.98f;
     private static TextToSpeechManager instance;
@@ -62,6 +62,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private volatile boolean initializing;
     private volatile boolean speaking;
     private volatile Runnable pendingDone;
+    /** Un solo reintento de la voz de nube antes de caer al motor local. */
+    private boolean reintentoNubeHecho;
 
     private TextToSpeechManager(Context context) {
         this.context = context.getApplicationContext();
@@ -92,6 +94,93 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         initializing = false;
         liberarMotor();
         inicializarMotor();
+    }
+
+    /** Voz configurada en Ajustes ("edge:...", nombre local o "auto"). */
+    public String vozConfigurada() {
+        try { return prefs.getString(KEY_VOICE, "auto"); } catch (Throwable t) { return "auto"; }
+    }
+
+    /**
+     * Pre-inicializa el motor local y la voz neural antes de hablar.
+     *
+     * <p>En el arranque en frío del AC8227L la CPU está saturada y el Wi-Fi aún
+     * no está listo: si el saludo se emite sin pre-calentar, EdgeVoiceSpeaker
+     * falla y cae al motor local robótico (voz distinta y entrecortada). Aquí se
+     * crea el motor TTS, se resuelve la pila TLS y se deja listo el
+     * {@link EdgeVoiceSpeaker} con la MISMA voz configurada.
+     */
+    public void precalentar() {
+        Log.i(TAG, "precalentar: voz configurada=" + vozConfigurada());
+        try {
+            if (!isInitialized && !initializing) inicializarMotor();
+        } catch (Throwable ignored) {}
+        final String nube = vozNubePreferida();
+        if (nube == null) return;
+        new Thread(new Runnable() {
+            public void run() {
+                // Resuelve certificados/roots y la fábrica TLS (IPv4) fuera del
+                // hilo principal para que la primera síntesis no arranque en frío.
+                try { com.fordlauncher.launcher.Net.init(context); } catch (Throwable ignored) {}
+                main.post(new Runnable() {
+                    public void run() { prepararEdge(nube); }
+                });
+            }
+        }, "tts-prewarm").start();
+    }
+
+    /** Crea/reutiliza el sintetizador de nube con la voz indicada. */
+    private void prepararEdge(String nombreVoz) {
+        try {
+            if (edge != null && nombreVoz.equals(edgeVoice)) return;
+            if (edge != null) {
+                try { edge.shutdown(); } catch (Throwable ignored) {}
+            }
+            edgeVoice = nombreVoz;
+            edge = new EdgeVoiceSpeaker(context, nombreVoz);
+            edge.setListener(listenerNube());
+            Log.i(TAG, "EdgeVoiceSpeaker listo (voz=" + nombreVoz + ")");
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo preparar EdgeVoiceSpeaker: " + t);
+            edge = null;
+            edgeVoice = null;
+        }
+    }
+
+    /** Listener común de la voz de nube (incluye el reintento antes del fallback). */
+    private EdgeVoiceSpeaker.Listener listenerNube() {
+        return new EdgeVoiceSpeaker.Listener() {
+            public void onSpeaking(boolean s) { setSpeaking(s); }
+            public void onError(final String msg) {
+                main.post(new Runnable() {
+                    public void run() {
+                        final String t = ultimoTextoNube;
+                        Log.w(TAG, "Voz de nube falló (" + msg + ") reintento=" + reintentoNubeHecho);
+                        if (t == null) return;
+                        if (!reintentoNubeHecho) {
+                            reintentoNubeHecho = true;
+                            // En el arranque el Wi-Fi puede tardar: se espera y se
+                            // reintenta con la MISMA voz antes de caer a la local.
+                            main.postDelayed(new Runnable() {
+                                public void run() {
+                                    if (edge == null) {
+                                        Log.w(TAG, "EdgeVoiceSpeaker no disponible, usando motor local");
+                                        hablarLocal(t);
+                                        return;
+                                    }
+                                    Log.i(TAG, "Reintentando voz de nube con la misma voz configurada");
+                                    edge.speak(t);
+                                }
+                            }, 1800L);
+                            return;
+                        }
+                        Log.w(TAG, "Voz de nube no disponible tras reintento, usando motor local");
+                        hablarLocal(t);
+                    }
+                });
+            }
+            public void onDone() { terminar(null); }
+        };
     }
 
     private synchronized void inicializarMotor() {
@@ -236,25 +325,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     private boolean hablarNube(String nombreVoz, String texto) {
         try {
-            if (edge == null || !nombreVoz.equals(edgeVoice)) {
-                if (edge != null) edge.shutdown();
-                edgeVoice = nombreVoz;
-                edge = new EdgeVoiceSpeaker(context, nombreVoz);
-                edge.setListener(new EdgeVoiceSpeaker.Listener() {
-                    public void onSpeaking(boolean s) { setSpeaking(s); }
-                    public void onError(final String msg) {
-                        main.post(new Runnable() {
-                            public void run() {
-                                Log.w(TAG, "Voz de nube falló, usando motor local: " + msg);
-                                String t = ultimoTextoNube;
-                                if (t != null) hablarLocal(t);
-                            }
-                        });
-                    }
-                    public void onDone() { terminar(null); }
-                });
-            }
+            prepararEdge(nombreVoz);
+            if (edge == null) return false;
             ultimoTextoNube = texto;
+            reintentoNubeHecho = false;
             edge.speak(texto);
             return true;
         } catch (Throwable t) {

@@ -95,6 +95,10 @@ public class Main extends Activity {
     static final String[] SLOT_ICONS = {"radio", "bluetooth", "music_note", "photo_camera", "folder", "settings"};
 
     private SharedPreferences prefs;
+    /** Instancia viva del launcher (la usa el receptor de comandos de depuración). */
+    private static Main INSTANCE;
+
+    static Main instance() { return INSTANCE; }
     private final Handler h = new Handler();
     private final List<ResolveInfo> apps = new ArrayList<ResolveInfo>();
     private final HashMap<String, Bitmap> iconCache = new HashMap<String, Bitmap>();
@@ -163,6 +167,7 @@ public class Main extends Activity {
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setBackgroundDrawable(new ColorDrawable(BG));
         prefs = getSharedPreferences("launcher", MODE_PRIVATE);
+        INSTANCE = this;
         try {
             com.fordlauncher.launcher.ai.OilLifeManager.getInstance(this).addListener(new com.fordlauncher.launcher.ai.OilLifeManager.Listener() {
                 public void onOdometerChanged(float odometroKm) {
@@ -170,6 +175,7 @@ public class Main extends Activity {
                 }
             });
         } catch (Throwable ignored) {}
+        try { com.fordlauncher.launcher.obd.ObdForegroundService.start(this); } catch (Throwable ignored) {}
         try { getObdRepo().iniciarAutoconexion(this); } catch (Throwable ignored) {}
         try { parked = new ParkedModeManager(this); } catch (Throwable ignored) {}
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
@@ -198,6 +204,22 @@ public class Main extends Activity {
         }
         checkBrightnessAndSwitch();
 
+        // Voz desde el volante (SWC/HCN): broadcasts mientras el launcher está activo.
+        try {
+            registerReceiver(swcVoiceReceiver, VoiceTrigger.filter());
+        } catch (Throwable ignored) {}
+
+        // Si el servicio abrió el launcher para pedir la voz, se atiende al reanudar.
+        if (getIntent() != null && getIntent().getBooleanExtra(VoiceTrigger.EXTRA_VOICE, false)) {
+            pendingVoiceOnResume = true;
+            try { getIntent().removeExtra(VoiceTrigger.EXTRA_VOICE); } catch (Throwable ignored) {}
+        }
+        // Lanzado como asistente/voz del sistema (MCU con asistente "Google", ASSIST, etc.).
+        if (isVoiceAssistIntent(getIntent())) {
+            pendingVoiceOnResume = true;
+            try { android.util.Log.i("FordLauncher/VoiceCmd", "Intent de asistente en onCreate: " + (getIntent() != null ? getIntent().getAction() : null)); } catch (Throwable ignored) {}
+        }
+
         brightnessObserver = new android.database.ContentObserver(h) {
             @Override
             public void onChange(boolean selfChange) {
@@ -220,16 +242,13 @@ public class Main extends Activity {
             wf.addAction(Intent.ACTION_USER_PRESENT);
             registerReceiver(wakeReceiver, wf);
         } catch (Throwable ignored) {}
-        try { maybeSpeakBootGreeting("start"); } catch (Throwable ignored) {}
-
+        // Pre-inicializa el motor TTS y la voz neural ANTES del saludo: en el
+        // arranque en frío del AC8227L el Wi-Fi y la CPU tardan unos segundos y
+        // sin esto el saludo cae a la voz robótica local entrecortada.
         try {
-            IntentFilter wf = new IntentFilter();
-            wf.addAction(Intent.ACTION_SCREEN_ON);
-            wf.addAction(Intent.ACTION_SCREEN_OFF);
-            wf.addAction(Intent.ACTION_USER_PRESENT);
-            registerReceiver(wakeReceiver, wf);
+            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).precalentar();
         } catch (Throwable ignored) {}
-        // Saludo automático al arranque/despertar (una vez)
+        // Saludo automático al arranque/despertar (una vez, con retardo interno).
         try { maybeSpeakBootGreeting("start"); } catch (Throwable ignored) {}
 
         applyTheme();
@@ -255,8 +274,9 @@ public class Main extends Activity {
             if (ll != null) { wLat = ll.getLatitude(); wLon = ll.getLongitude(); }
         } catch (Throwable ignored) { }
         loadApps();
-        // Conectar al ELM327 automáticamente al arrancar el launcher (sin tener que abrir Diagnóstico).
-        try { getObdRepo().connect(null); } catch (Throwable ignored) {}
+        // El servicio OBD en primer plano se encarga de la conexión (con su
+        // retardo de estabilización de 8 s); aquí solo lo aseguramos.
+        try { com.fordlauncher.launcher.obd.ObdForegroundService.start(this); } catch (Throwable ignored) {}
 
         IntentFilter f = new IntentFilter();
         f.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -690,6 +710,7 @@ public class Main extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (INSTANCE == this) INSTANCE = null;
         try { unregisterReceiver(pkgReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(timeReceiver); } catch (Exception ignored) { }
         try { nowPlaying.stop(); } catch (Throwable ignored) { }
@@ -699,6 +720,7 @@ public class Main extends Activity {
         try { if (phonePrivacy != null) phonePrivacy.close(); } catch (Throwable ignored) { }
         try { if (callWin != null) callWin.hide(); } catch (Throwable ignored) { }
         try { unregisterReceiver(headlightReceiver); } catch (Throwable ignored) { }
+        try { unregisterReceiver(swcVoiceReceiver); } catch (Throwable ignored) { }
         if (brightnessObserver != null) {
             try {
                 getContentResolver().unregisterContentObserver(brightnessObserver);
@@ -736,7 +758,11 @@ public class Main extends Activity {
         updateClock();
         refreshStates();
         startGps();
-        try { if (!getObdRepo().isConnected()) getObdRepo().iniciarAutoconexion(this); } catch (Throwable ignored) {}
+        try { com.fordlauncher.launcher.obd.ObdForegroundService.start(this); } catch (Throwable ignored) {}
+        try {
+            com.fordlauncher.launcher.obd.ObdRepository r = getObdRepo();
+            if (!r.esEnlaceActivo() && !r.isConnecting()) r.iniciarAutoconexion(this);
+        } catch (Throwable ignored) {}
         h.postDelayed(ticker, 1000);
         h.removeCallbacks(progressTick);
         h.post(progressTick);
@@ -744,6 +770,7 @@ public class Main extends Activity {
         try { if (parked != null) parked.onResume(); } catch (Throwable ignored) {}
         try { maybeSpeakBootGreeting("resume"); } catch (Throwable ignored) {}
         try { startIlluminationPolling(); } catch (Throwable ignored) {}
+        try { atenderVozPendiente(); } catch (Throwable ignored) {}
     }
 
     /** Android 6+: respuesta a la solicitud de permisos. */
@@ -757,6 +784,13 @@ public class Main extends Activity {
             if (res != null) for (int r : res) if (r == android.content.pm.PackageManager.PERMISSION_GRANTED) ok = true;
             if (res == null || res.length == 0) ok = false;
             try { if (workshop != null && workshopView != null) workshop.onMicPerm(ok); } catch (Throwable ignored) {}
+            return;
+        }
+        if (req == 101) {
+            boolean ok = false;
+            if (res != null) for (int r : res) if (r == android.content.pm.PackageManager.PERMISSION_GRANTED) ok = true;
+            if (res == null || res.length == 0) ok = false;
+            onFabMicPerm(ok);
             return;
         }
         if (req != 77) return;
@@ -776,9 +810,109 @@ public class Main extends Activity {
         try { com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).abandonAudioFocus(); } catch (Throwable ignored) {}
     }
 
+    /** Pendiente de abrir el asistente cuando la actividad vuelva al frente. */
+    private boolean pendingVoiceOnResume;
+    /** Evita arranques duplicados del micrófono entre onCreate/onNewIntent/onResume/SWC. */
+    private long ultimoInicioVozMs;
+
+    /** ¿El intent corresponde a una invocación del asistente/voz del sistema? */
+    private boolean isVoiceAssistIntent(Intent i) {
+        if (i == null) return false;
+        String a = i.getAction();
+        return Intent.ACTION_ASSIST.equals(a)
+                || "android.intent.action.VOICE_ASSIST".equals(a)
+                || "android.intent.action.VOICE_COMMAND".equals(a)
+                || "android.speech.action.WEB_SEARCH".equals(a)
+                || "android.speech.action.VOICE_SEARCH_HANDS_FREE".equals(a)
+                || "com.google.android.googlequicksearchbox.MUSIC_SEARCH".equals(a);
+    }
+
+    /** Dispara inmediatamente el modo conversación en vivo del asistente de voz. */
+    public void iniciarConversacionEnVivo() {
+        try { activarVozSwc(); } catch (Throwable t) {
+            android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo iniciar conversación en vivo: " + t);
+        }
+    }
+
+    /** Receptor global de voz del SWC/HCN mientras el launcher está activo. */
+    private final BroadcastReceiver swcVoiceReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent != null ? intent.getAction() : null;
+            VoiceTrigger.fire(context, "broadcast " + action);
+        }
+    };
+
+    /**
+     * Dispara el modo conversación en vivo, equivalente a tocar el FAB de IA.
+     * Se usa tanto para las teclas del volante como para broadcasts de HCN.
+     */
+    void activarVozSwc() {
+        // Una prensa larga puede emitir varios eventos; si ya hay conversación
+        // activa no se apaga por rebotes (para detenerla está el FAB).
+        if (modoConversacionActivo || fabEscuchando) {
+            android.util.Log.i("FordLauncher/VoiceCmd", "Voz SWC ignorada: conversación ya activa");
+            return;
+        }
+        if (hasWindowFocus()) {
+            try { onFabTap(); } catch (Throwable t) {
+                android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo activar la voz: " + t);
+            }
+            return;
+        }
+        // Launcher en pausa o sin foco: se trae al frente y se atiende en onResume.
+        pendingVoiceOnResume = true;
+        try {
+            startActivity(new Intent(this, Main.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } catch (Throwable t) {
+            android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo traer el launcher al frente: " + t);
+        }
+        // Respaldo por si ya estaba al frente y onResume no se repite.
+        h.postDelayed(new Runnable() { public void run() {
+            if (!pendingVoiceOnResume) return;
+            if (hasWindowFocus() && !modoConversacionActivo) {
+                pendingVoiceOnResume = false;
+                try { onFabTap(); } catch (Throwable ignored) {}
+            }
+        }}, 700);
+    }
+
+    /** Atiende una petición de voz que llegó con la actividad en pausa. */
+    private void atenderVozPendiente() {
+        if (!pendingVoiceOnResume) return;
+        pendingVoiceOnResume = false;
+        h.postDelayed(new Runnable() {
+            public void run() {
+                // Nunca abrir un segundo micrófono si ya hay conversación/escucha.
+                if (modoConversacionActivo || fabEscuchando) {
+                    android.util.Log.i("FordLauncher/VoiceCmd", "atenderVozPendiente ignorado: conversación ya activa");
+                    return;
+                }
+                // onCreate + onNewIntent + onResume pueden dispararse casi juntos
+                // al recibir VOICE_ASSIST: solo el primero abre el micrófono.
+                if (System.currentTimeMillis() - ultimoInicioVozMs < 1500L) {
+                    android.util.Log.i("FordLauncher/VoiceCmd", "atenderVozPendiente ignorado: arranque de voz reciente");
+                    return;
+                }
+                try { onFabTap(); } catch (Throwable ignored) {}
+            }
+        }, 350);
+    }
+
     @Override
     public boolean dispatchKeyEvent(android.view.KeyEvent event) {
         if (event != null) {
+            int kc = event.getKeyCode();
+            if (kc == KeyEvent.KEYCODE_VOICE_ASSIST
+                    || kc == KeyEvent.KEYCODE_ASSIST
+                    || kc == KeyEvent.KEYCODE_SEARCH) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    android.util.Log.i("FordLauncher/VoiceCmd", "Tecla SWC de voz: keyCode=" + kc);
+                    VoiceTrigger.fire(this, "key=" + kc);
+                }
+                return true; // consume la tecla para que no abra Google/otra app
+            }
             android.util.Log.e("KEY_DEBUG", "keyCode=" + event.getKeyCode() + " action=" + event.getAction()
                     + " source=" + event.getSource() + " device=" + (event.getDevice() != null ? event.getDevice().getName() : "null")
                     + " repeat=" + event.getRepeatCount());
@@ -836,6 +970,18 @@ public class Main extends Activity {
     protected void onNewIntent(Intent i) {
         super.onNewIntent(i);
         closeDrawer();
+        if (i != null) {
+            try { setIntent(i); } catch (Throwable ignored) {}
+            if (i.getBooleanExtra(VoiceTrigger.EXTRA_VOICE, false)) {
+                pendingVoiceOnResume = true;
+                try { i.removeExtra(VoiceTrigger.EXTRA_VOICE); } catch (Throwable ignored) {}
+            }
+            if (isVoiceAssistIntent(i)) {
+                pendingVoiceOnResume = true;
+                try { android.util.Log.i("FordLauncher/VoiceCmd", "Intent de asistente en onNewIntent: " + i.getAction()); } catch (Throwable ignored) {}
+                try { atenderVozPendiente(); } catch (Throwable ignored) {}
+            }
+        }
     }
 
     @Override
@@ -1034,14 +1180,24 @@ public class Main extends Activity {
             bootGreetingDoneThisProcess = true;
             prefs.edit().putBoolean("pending_boot_greeting", false).putLong("last_boot_greeting_ms", now).apply();
 
-            // Emitir con un pequeño retraso para que TTS/servicios estén listos
+            // Emitir con retardo: en el arranque en frío del AC8227L la CPU está
+            // saturada y el Wi-Fi tarda en estabilizarse. 3.5–4.5 s después de
+            // onCreate el motor TTS y la voz neural ya están pre-inicializados.
+            final long retardo = pending ? 3800L : 4200L;
             h.postDelayed(new Runnable() {
                 public void run() {
                     try {
-                        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(saludo);
+                        com.fordlauncher.launcher.ai.TextToSpeechManager tm =
+                                com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+                        // Pre-inicializa de nuevo (por si el motor se reinició) y habla
+                        // con la MISMA voz configurada, sin caer a la voz local.
+                        tm.precalentar();
+                        android.util.Log.i("FordLauncher/Greet",
+                                "saludo con voz configurada=" + tm.vozConfigurada() + " retardo=" + retardo + "ms");
+                        tm.hablarTextoLargo(saludo);
                     } catch (Throwable ignored) {}
                 }
-            }, pending ? 2500 : 3500);
+            }, retardo);
         } catch (Throwable ignored) {}
     }
     private boolean fabSilencio;
@@ -1212,6 +1368,15 @@ public class Main extends Activity {
             endFabConversation();
             return;
         }
+        // Un VOICE_ASSIST puede disparar onCreate/onNewIntent/onResume/SWC casi a la
+        // vez. Sin este filtro se llamaría startListening() dos veces seguidas y el
+        // SpeechRecognizer devolvería ERROR_CLIENT (5).
+        long ahora = System.currentTimeMillis();
+        if (fabEscuchando || (ahora - ultimoInicioVozMs) < 1500L) {
+            android.util.Log.i("FordLauncher/VoiceCmd", "onFabTap ignorado: arranque de voz reciente o escucha activa");
+            return;
+        }
+        ultimoInicioVozMs = ahora;
         modoConversacionActivo = true;
         startFabListening();
     }
@@ -1219,8 +1384,14 @@ public class Main extends Activity {
     public void onFabMicPerm(boolean granted) {
         if (!fabMicPending) return;
         fabMicPending = false;
-        if (granted) startFabListening();
-        else toast("Necesito el permiso de micrófono para hablarle a la IA");
+        if (granted) {
+            // El primer toque/prensa solo pidió permiso: ahora sí arranca la
+            // conversación en vivo, igual que un toque normal del FAB.
+            modoConversacionActivo = true;
+            startFabListening();
+        } else {
+            toast("Necesito el permiso de micrófono para hablarle a la IA");
+        }
     }
 
     private void startFabListening() {
@@ -1282,8 +1453,9 @@ public class Main extends Activity {
         h.removeCallbacks(fabReescuchar);
         fabReintentosTts = 0;
         if (fabVoice != null) {
-            try { fabVoice.cancel(); } catch (Throwable ignored) {}
+            try { fabVoice.stopListening(); } catch (Throwable ignored) {}
         }
+        android.util.Log.i("FordLauncher/Voice", "endFabConversation -> bucle conversacional finalizado (modoConversacionActivo=false)");
         try {
             com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
             if (tm.isSpeaking()) tm.detener();
@@ -1292,12 +1464,14 @@ public class Main extends Activity {
     }
 
     private void fabResponder(String texto, boolean continuar) {
-        if (texto == null || texto.trim().length() == 0) { endFabConversation(); return; }
+        String limpio = texto == null ? null : com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(texto);
+        if (limpio == null) { endFabConversation(); return; }
         if (!continuar) modoConversacionActivo = false;
         fabTtsEnCurso = true;
-        showFabTextBubble(texto);
+        android.util.Log.i("FordLauncher/TTS", "hablarTexto -> limpio=\"" + limpio + "\" jsonRaw=" + (texto != null && texto.contains("\"action\"")));
+        showFabTextBubble(limpio);
         com.fordlauncher.launcher.ai.TextToSpeechManager tm = com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
-        tm.hablarTextoLargo(texto, new Runnable() {
+        tm.hablarTextoLargo(limpio, new Runnable() {
             public void run() {
                 fabTtsEnCurso = false;
                 if (modoConversacionActivo) {
@@ -1341,6 +1515,7 @@ public class Main extends Activity {
             String decir = speech.length() > 0 ? speech : ("Llamando a " + target);
             modoConversacionActivo = false;
             fabTtsEnCurso = true;
+            if (fabVoice != null) { try { fabVoice.stopListening(); } catch (Throwable ignored) {} }
             showFabTextBubble(decir);
             final String finalTarget = target;
             final String finalSpeech = decir;
@@ -1362,12 +1537,54 @@ public class Main extends Activity {
             return true;
         }
         if ("PLAY_MUSIC".equalsIgnoreCase(action)) {
-            boolean ok = false;
-            try { ok = com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSeldaMusic(Main.this, query); } catch (Throwable ignored) {}
-            String decir;
-            if (!ok) decir = "No pude abrir Seldia Music para reproducir " + (query.length() > 0 ? query : "la música");
-            else decir = speech.length() > 0 ? speech : ("Poniendo " + (query.length() > 0 ? query : "música") + " en Seldia Music");
+            // Control multimedia por voz (Gemini): finaliza la escucha continua
+            // inmediatamente y reproduce en segundo plano sin reabrir el micrófono.
+            String q = query;
+            if ((q == null || q.trim().length() == 0)) q = appName;
+            if ((q == null || q.trim().length() == 0)) q = speech;
+            final String qFinal = (q == null) ? "" : q.trim();
+            modoConversacionActivo = false;
+            if (fabVoice != null) { try { fabVoice.stopListening(); } catch (Throwable ignored) {} }
+            try {
+                if (com.fordlauncher.launcher.ai.AppExecutors.get().network != null) {
+                    com.fordlauncher.launcher.ai.AppExecutors.get().network.execute(new Runnable() {
+                        public void run() {
+                            try { com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(Main.this, qFinal); }
+                            catch (Throwable ignored) {}
+                        }
+                    });
+                } else {
+                    com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(this, qFinal);
+                }
+            } catch (Throwable ignored) {}
+            refrescarSesionMusica(500);
+            refrescarSesionMusica(1500);
+            refrescarSesionMusica(3000);
+            fabResponder("Ok.", false);
+            return true;
+        }
+        if ("OPEN_DOCK".equalsIgnoreCase(action)) {
+            String item = appName.length() > 0 ? appName : query;
+            String key = dockKeyDe(com.fordlauncher.launcher.ai.ContactNames.norm(item));
+            boolean ok = abrirDockPorVoz(key);
+            String decir = ok ? (speech.length() > 0 ? speech : ("Abriendo " + etiquetaDock(key)))
+                    : ("No encontré «" + item + "» en el menú");
             fabResponder(decir, false);
+            return true;
+        }
+        if ("OPEN_DIAGNOSTIC".equalsIgnoreCase(action)) {
+            String item = query.length() > 0 ? query : appName;
+            int tab = com.fordlauncher.launcher.DiagnosticoView.pestanaDe(com.fordlauncher.launcher.ai.ContactNames.norm(item));
+            abrirDiagnostico(tab, false);
+            fabResponder(speech.length() > 0 ? speech
+                    : (tab >= 0 ? ("Abriendo Diagnóstico en " + nombrePestana(tab) + ".") : "Abriendo Diagnóstico."), false);
+            return true;
+        }
+        if ("ANALYZE_AI".equalsIgnoreCase(action)) {
+            String item = query.length() > 0 ? query : appName;
+            int tab = com.fordlauncher.launcher.DiagnosticoView.pestanaDe(com.fordlauncher.launcher.ai.ContactNames.norm(item));
+            abrirDiagnostico(tab, true);
+            fabResponder(speech.length() > 0 ? speech : "Analizando con IA.", false);
             return true;
         }
         return false;
@@ -1375,10 +1592,24 @@ public class Main extends Activity {
 
     private void fabAskAi(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) { endFabConversation(); return; }
-        // Validación local: si pregunta por el vehículo y el escáner está desconectado, no se consulta a Gemini.
+        // Primero los comandos que el launcher resuelve solo (dock, Diagnóstico,
+        // música en segundo plano, llamadas). Así no dependen de la nube ni del OBD.
+        try { if (ejecutarComandoLocal(pregunta)) return; } catch (Throwable ignored) {}
+        // Validación local con estado unificado: si el OBD2 está reconectando,
+        // espera hasta 2.5 s o usa la última lectura reciente (<20 s) antes de
+        // decidir que está desconectado.
         boolean conectado = false;
-        try { conectado = getObdRepo() != null && getObdRepo().isConnected(); } catch (Throwable ignored) {}
-        if (com.fordlauncher.launcher.obd.VehicleIntent.requiereVehiculo(pregunta) && !conectado) {
+        boolean requiereVehiculo = com.fordlauncher.launcher.obd.VehicleIntent.requiereVehiculo(pregunta);
+        try {
+            com.fordlauncher.launcher.obd.ObdRepository r = getObdRepo();
+            if (r != null) {
+                conectado = r.isConnected() || r.hasRecentValues(20000);
+                if (!conectado && requiereVehiculo && r.isConnecting()) {
+                    conectado = r.esperarConexion(2500) || r.hasRecentValues(20000);
+                }
+            }
+        } catch (Throwable ignored) {}
+        if (requiereVehiculo && !conectado) {
             final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
             showFabTextBubble(aviso);
             fabResponder(aviso, true);
@@ -1397,8 +1628,14 @@ public class Main extends Activity {
                             toast(error != null ? error : "Sin respuesta de la IA");
                             return;
                         }
-                        if (ejecutarAccionIa(text)) return;
-                        fabResponder(text, true);
+                        final String textoLimpio = com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(text);
+                        if (textoLimpio == null) {
+                            endFabConversation();
+                            toast("Sin respuesta de la IA");
+                            return;
+                        }
+                        if (ejecutarAccionIa(textoLimpio)) return;
+                        fabResponder(textoLimpio, true);
                     }
                 });
             }
@@ -1417,10 +1654,16 @@ public class Main extends Activity {
     private String fabSnapshot() {
         try {
             StringBuilder sb = new StringBuilder("{");
-            boolean conectado = false;
-            try { conectado = getObdRepo() != null && getObdRepo().isConnected(); } catch (Throwable ignored) {}
-            sb.append("\"obd_conectado\":").append(conectado);
-            java.util.Map<String, Float> v = getObdRepo() != null ? getObdRepo().getValues() : null;
+            com.fordlauncher.launcher.obd.ObdRepository r = getObdRepo();
+            boolean conectado = r != null && r.isConnected();
+            boolean reciente = r != null && r.hasRecentValues(20000);
+            // El asistente no debe decir "desconectado" durante una reconexión:
+            // si hay lectura reciente (<20 s) se considera telemetría vigente.
+            sb.append("\"obd_conectado\":").append(conectado || reciente);
+            sb.append(",\"obd_estado\":\"").append(r != null ? r.getLinkState().name() : "DISCONNECTED").append("\"");
+            sb.append(",\"obd_reciente\":").append(reciente);
+            sb.append(",\"obd_ultima_trama_ms\":").append(r != null ? (System.currentTimeMillis() - r.getLastFrameMs()) : -1);
+            java.util.Map<String, Float> v = r != null ? r.getValues() : null;
             if (v != null) {
                 String[] keys = {com.fordlauncher.launcher.obd.Pids.RPM, com.fordlauncher.launcher.obd.Pids.COOLANT, com.fordlauncher.launcher.obd.Pids.SPEED, com.fordlauncher.launcher.obd.Pids.FUEL_RATE, com.fordlauncher.launcher.obd.Pids.VOLTAGE, com.fordlauncher.launcher.obd.Pids.FUEL};
                 for (String k : keys) {
@@ -2204,7 +2447,7 @@ public class Main extends Activity {
     }
 
     com.fordlauncher.launcher.obd.ObdRepository getObdRepo() {
-        if (obdRepo == null) obdRepo = new com.fordlauncher.launcher.obd.ObdRepository(this);
+        if (obdRepo == null) obdRepo = com.fordlauncher.launcher.obd.ObdRepository.getInstance(this);
         return obdRepo;
     }
     android.content.SharedPreferences getPrefs() { return prefs; }
@@ -2230,8 +2473,12 @@ public class Main extends Activity {
         workshopView.addView(close, lp);
         place(board, workshopView, 0, 56, 1024, 484);
         workshopView.bringToFront();
-        // Conectar con MAC por defecto si el usuario ya emparejó ELM327
-        try { getObdRepo().connect(null); } catch (Throwable ignored) {}
+        // Entrada pasiva: si el repositorio ya está CONNECTED/CONNECTING no se
+        // vuelve a llamar a connect(); solo se asegura la autoconexión si está OFF.
+        try {
+            com.fordlauncher.launcher.obd.ObdRepository r = getObdRepo();
+            if (!r.isConnected() && !r.isConnecting()) r.iniciarAutoconexion(this);
+        } catch (Throwable ignored) {}
     }
 
     private void closeObdDiag() {
@@ -2250,14 +2497,14 @@ public class Main extends Activity {
         return callWin;
     }
 
-    /** Marca un número por HFP (usado por el copiloto por voz). */
-    public void callNumber(String number) {
-        if (number == null || number.trim().length() == 0) return;
+    /** Marca un número por HFP (usado por el copiloto por voz). true si la llamada salió. */
+    public boolean callNumber(String number) {
+        if (number == null || number.trim().length() == 0) return false;
         if (phone == null) {
             try { phone = new TelefonoView(this, s > 0 ? s : 1f); } catch (Throwable ignored) {}
         }
         if (phone != null) {
-            try { phone.callNumber(number); return; } catch (Throwable ignored) {}
+            try { if (phone.callNumber(number)) return true; } catch (Throwable ignored) {}
         }
         // Fallback: intent de llamada del sistema.
         try {
@@ -2265,8 +2512,289 @@ public class Main extends Activity {
             i.setData(android.net.Uri.parse("tel:" + number));
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
+            return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** Varios contactos muy parecidos: pregunta a cuál llamar (voz + lista táctil). */
+    public boolean preguntarContacto(final List<com.fordlauncher.launcher.ai.VoiceCallHelper.Cand> cands) {
+        if (cands == null || cands.isEmpty()) return false;
+        try {
+            final List<com.fordlauncher.launcher.ai.VoiceCallHelper.Cand> lista = cands;
+            String[] labels = new String[lista.size()];
+            for (int i = 0; i < lista.size(); i++) {
+                com.fordlauncher.launcher.ai.VoiceCallHelper.Cand c = lista.get(i);
+                labels[i] = com.fordlauncher.launcher.ai.ContactNames.formatear(c.name) + "   ·   " + c.number;
+            }
+            new AlertDialog.Builder(this, dlg())
+                    .setTitle("¿A cuál llamo?")
+                    .setItems(labels, new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int w) {
+                            try {
+                                com.fordlauncher.launcher.ai.TelefonoManager.marcarNumero(Main.this, lista.get(w).number);
+                            } catch (Throwable ignored) {}
+                        }
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    // ───────────── control por voz del Dock y de Diagnóstico ─────────────
+
+    /** Palabras que el asistente acepta para cada botón del dock (en orden del dock). */
+    private static final String[] DOCK_KEYS = {
+            "radio", "bluetooth", "musica", "telefono", "apps",
+            "navegador", "archivos", "diagnostico", "ajustes"
+    };
+
+    private static boolean esImperativo(String t) {
+        String[] v = {"abre", "abrir", "abreme", "ve a", "ir a", "vamos a", "lleva", "llevame",
+                "entra", "entrar", "muestra", "muestrame", "cambia", "cambiar", "pon", "ponme",
+                "quiero ver", "quiero ir", "inicia", "iniciar", "lanza", "lanzar", "ejecuta"};
+        for (String x : v) if (t.startsWith(x + " ") || t.equals(x)) return true;
+        return false;
+    }
+
+    private static boolean contienePalabra(String t, String w) {
+        if (t == null) return false;
+        String[] tok = t.split(" ");
+        for (String x : tok) if (x.equals(w)) return true;
+        return false;
+    }
+
+    /** Devuelve la clave del dock mencionada en el texto, o null. */
+    private String dockKeyDe(String t) {
+        if (t == null || t.length() == 0) return null;
+        if (contienePalabra(t, "radio") || contienePalabra(t, "fm") || t.contains("emisora")) return "radio";
+        if (contienePalabra(t, "bluetooth") || contienePalabra(t, "bt")) return "bluetooth";
+        if (contienePalabra(t, "musica") || contienePalabra(t, "music") || contienePalabra(t, "seldia")) return "musica";
+        if (contienePalabra(t, "telefono") || contienePalabra(t, "llamadas") || contienePalabra(t, "marcador")
+                || contienePalabra(t, "contactos")) return "telefono";
+        if (contienePalabra(t, "apps") || contienePalabra(t, "aplicaciones") || contienePalabra(t, "aplicacion")
+                || contienePalabra(t, "programas")) return "apps";
+        if (contienePalabra(t, "navegador") || contienePalabra(t, "internet") || contienePalabra(t, "web")) return "navegador";
+        if (contienePalabra(t, "archivo") || contienePalabra(t, "archivos") || contienePalabra(t, "explorador")
+                || contienePalabra(t, "documentos") || t.contains("gestor de archivos")) return "archivos";
+        if (contienePalabra(t, "diagnostico") || contienePalabra(t, "taller") || contienePalabra(t, "obd")) return "diagnostico";
+        if (contienePalabra(t, "ajustes") || contienePalabra(t, "configuracion") || contienePalabra(t, "settings")
+                || contienePalabra(t, "preferencias")) return "ajustes";
+        return null;
+    }
+
+    /** Ejecuta el mismo código que el toque del dock, respetando la app configurada. */
+    private boolean abrirDockPorVoz(String key) {
+        if (key == null) return false;
+        android.util.Log.i("FordLauncher/VoiceCmd", "dock -> " + key);
+        try {
+            if ("radio".equals(key)) { openSlot(0); return true; }
+            if ("bluetooth".equals(key)) { openSlot(1); return true; }
+            if ("musica".equals(key)) { openSlot(2); return true; }
+            if ("telefono".equals(key)) { openPhone(); return true; }
+            if ("apps".equals(key)) { openDrawer(); return true; }
+            if ("navegador".equals(key)) { openBrowser(); return true; }
+            if ("archivos".equals(key)) { openSlot(4); return true; }
+            if ("diagnostico".equals(key)) { asegurarDiagnostico(); return true; }
+            if ("ajustes".equals(key)) { openSlot(5); return true; }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private void asegurarDiagnostico() {
+        if (workshopView == null) openObdDiag();
+        else {
+            try { workshopView.bringToFront(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** Abre Diagnóstico (si hace falta), salta a una pestaña y/o lanza «Analizar con IA». */
+    void abrirDiagnostico(int tab, boolean analizar) {
+        android.util.Log.i("FordLauncher/VoiceCmd", "diagnostico tab=" + tab + " analizar=" + analizar);
+        asegurarDiagnostico();
+        final com.fordlauncher.launcher.DiagnosticoView w = workshop;
+        if (w == null) return;
+        if (tab >= 0) {
+            try { w.setTab(tab); } catch (Throwable ignored) {}
+        }
+        if (analizar) {
+            h.postDelayed(new Runnable() {
+                public void run() { try { w.analizarConIa(); } catch (Throwable ignored) {} }
+            }, 300);
+        }
+    }
+
+    private static String nombrePestana(int tab) {
+        switch (tab) {
+            case 0: return "Salud";
+            case 1: return "Códigos de falla";
+            case 2: return "Sensores";
+            case 3: return "Gráficas";
+            case 4: return "Más";
+        }
+        return "Salud";
+    }
+
+    /**
+     * Comandos que se resuelven en el propio launcher, sin depender de la nube:
+     * dock, pestañas de Diagnóstico, «analizar», música en segundo plano y llamadas.
+     * Devuelve true si ya se ejecutó algo (y no hay que consultar a Gemini).
+     */
+    private boolean ejecutarComandoLocal(String raw) {
+        if (raw == null) return false;
+        String t = com.fordlauncher.launcher.ai.ContactNames.norm(raw);
+        if (t.length() == 0) return false;
+        String rawLower = raw.trim().toLowerCase(Locale.ROOT);
+
+        // 1) Diagnóstico / analizar con IA
+        boolean pideAnalisis = t.contains("analiza") || t.contains("analisis");
+        boolean pideDiag = contienePalabra(t, "diagnostico") || contienePalabra(t, "taller")
+                || contienePalabra(t, "obd");
+        int tab = com.fordlauncher.launcher.DiagnosticoView.pestanaDe(t);
+
+        if (pideAnalisis) {
+            abrirDiagnostico(tab, true);
+            fabResponder(tab >= 0
+                    ? ("Abriendo Diagnóstico en " + nombrePestana(tab) + " y analizando con IA.")
+                    : "Abriendo Diagnóstico y analizando con IA.", false);
+            return true;
+        }
+        if (pideDiag) {
+            abrirDiagnostico(tab, false);
+            fabResponder(tab >= 0 ? ("Abriendo Diagnóstico en " + nombrePestana(tab) + ".") : "Abriendo Diagnóstico.", false);
+            return true;
+        }
+        if (tab >= 0 && (esImperativo(t) || t.equals(com.fordlauncher.launcher.ai.ContactNames.norm(nombrePestana(tab)))
+                || t.startsWith("pestana ") || t.startsWith("la pestana "))) {
+            abrirDiagnostico(tab, false);
+            fabResponder("Abriendo Diagnóstico en " + nombrePestana(tab) + ".", false);
+            return true;
+        }
+
+        // 2) Reproducir música en segundo plano (sin traer Seldia al frente)
+        String[] musicVerbs = {"reproduce ", "reproducir ", "ponme ", "pon ", "toca ", "tocar ",
+                "escuchar ", "quiero escuchar ", "pon la musica ", "pon musica ", "pon la cancion ",
+                "pon la canción ", "buscar cancion ", "buscar canción ", "busca la cancion ",
+                "busca la canción ", "busca cancion ", "busca canción "};
+        for (String v : musicVerbs) {
+            if (!rawLower.startsWith(v)) continue;
+            String q = raw.trim().substring(v.length()).trim();
+            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis|cancion|canción|tema)\\s+", "").trim();
+            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis)\\s+", "").trim();
+            if (q.length() == 0) return false;
+            String qNorm = com.fordlauncher.launcher.ai.ContactNames.norm(q);
+            if (contienePalabra(qNorm, "radio") || contienePalabra(qNorm, "fm")) {
+                abrirDockPorVoz("radio");
+                fabResponder("Radio.", false);
+                return true;
+            }
+            final String qFinal = q;
+            try {
+                if (com.fordlauncher.launcher.ai.AppExecutors.get().network != null) {
+                    com.fordlauncher.launcher.ai.AppExecutors.get().network.execute(new Runnable() {
+                        public void run() {
+                            try { com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(Main.this, qFinal); }
+                            catch (Throwable ignored) {}
+                        }
+                    });
+                } else {
+                    com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(this, qFinal);
+                }
+            } catch (Throwable ignored) {}
+            refrescarSesionMusica(500);
+            refrescarSesionMusica(1500);
+            refrescarSesionMusica(3000);
+            fabResponder("Ok.", false);
+            return true;
+        }
+
+        // 3) Llamadas por voz resueltas localmente (sin nube)
+        String[] callVerbs = {"llama a ", "llamar a ", "marca a ", "marcar a ",
+                "llama al ", "marca al ", "llamale a ", "comunica con "};
+        for (String v : callVerbs) {
+            if (!rawLower.startsWith(v)) continue;
+            String target = raw.trim().substring(v.length()).trim();
+            if (target.length() == 0) return false;
+            modoConversacionActivo = false;
+            showFabTextBubble("Llamando a " + target);
+            try { com.fordlauncher.launcher.ai.VoiceCallHelper.procesarLlamadaPorVoz(this, target, "Llamando a " + target); }
+            catch (Throwable ignored) {}
+            return true;
+        }
+
+        // 4) Botones del Dock
+        String key = dockKeyDe(t);
+        if (key != null) {
+            boolean exacto = t.equals(key) || t.equals("el " + key) || t.equals("la " + key)
+                    || t.equals("los " + key) || t.equals("las " + key)
+                    || t.endsWith(" " + key) && esImperativo(t);
+            if (esImperativo(t) || exacto) {
+                boolean ok = abrirDockPorVoz(key);
+                if (ok) {
+                    fabResponder("Abriendo " + etiquetaDock(key) + ".", false);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Reengancha el MediaController activo (Seldia, etc.) para pintar el card de música sin esperar callbacks. */
+    private void refrescarSesionMusica(long delayMs) {
+        try {
+            h.postDelayed(new Runnable() {
+                public void run() {
+                    try { if (mediaWatcher != null) mediaWatcher.start(); } catch (Throwable ignored) {}
+                    try { updatePlayIcon(); } catch (Throwable ignored) {}
+                }
+            }, delayMs);
         } catch (Throwable ignored) {}
     }
+
+    private static String etiquetaDock(String key) {
+        if ("radio".equals(key)) return "Radio";
+        if ("bluetooth".equals(key)) return "Bluetooth";
+        if ("musica".equals(key)) return "Música";
+        if ("telefono".equals(key)) return "Teléfono";
+        if ("apps".equals(key)) return "Apps";
+        if ("navegador".equals(key)) return "Navegador";
+        if ("archivos".equals(key)) return "Archivos";
+        if ("diagnostico".equals(key)) return "Diagnóstico";
+        if ("ajustes".equals(key)) return "Ajustes";
+        return key;
+    }
+
+    /** Solo en compilaciones debug: prueba el formateo «Nombre Apellido» de un texto. */
+    void debugFormatear(String raw) {
+        String f = com.fordlauncher.launcher.ai.ContactNames.formatear(raw);
+        String unido = com.fordlauncher.launcher.ai.ContactNames.unir("Juan Carlos", "Pérez Gómez");
+        android.util.Log.i("FordLauncher/VoiceCall",
+                "formatear(\"" + raw + "\") = \"" + f + "\"  | unir(given,family) = \"" + unido + "\"");
+    }
+
+    /** Solo en compilaciones debug: resuelve un contacto y lo deja en el log (no marca). */
+    void debugResolverContacto(final String q) {
+        new Thread(new Runnable() {
+            public void run() {
+                java.util.List<com.fordlauncher.launcher.ai.VoiceCallHelper.Cand> cs =
+                        com.fordlauncher.launcher.ai.VoiceCallHelper.buscarCandidatos(Main.this, q);
+                StringBuilder sb = new StringBuilder("consulta=\"" + q + "\" resultados=" + cs.size());
+                for (int i = 0; i < Math.min(6, cs.size()); i++) {
+                    com.fordlauncher.launcher.ai.VoiceCallHelper.Cand c = cs.get(i);
+                    sb.append(" | ").append(com.fordlauncher.launcher.ai.ContactNames.formatear(c.name))
+                            .append(" [").append(c.score).append(c.starred ? ",fav" : "").append("]");
+                }
+                android.util.Log.i("FordLauncher/VoiceCall", sb.toString());
+            }
+        }, "debug-resolve").start();
+    }
+
+    /** Solo en compilaciones debug: ejecuta un JSON de acción del copiloto. */
+    boolean debugEjecutarJson(String json) { return ejecutarAccionIa(json); }
+
+    /** Solo en compilaciones debug: ejecuta una frase como si la hubiera dictado el usuario. */
+    boolean debugEjecutarTexto(String texto) { return ejecutarComandoLocal(texto); }
 
     /** Estados HFP llegan desde PhonePrivacy aunque el panel Teléfono esté cerrado. */
     void onPhoneCallState(String state, String number) {
@@ -2435,7 +2963,7 @@ public class Main extends Activity {
             if (l != null) {
                 // Fallback de odómetro por GPS cuando OBD2 está desconectado.
                 try {
-                    boolean obdOn = getObdRepo().getState() == com.fordlauncher.launcher.obd.ObdRepository.State.ON;
+                    boolean obdOn = getObdRepo().isConnected();
                     float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0f;
                     if (!obdOn) {
                         com.fordlauncher.launcher.ai.OilLifeManager.getInstance(Main.this).onSpeedUpdate(kmh);
