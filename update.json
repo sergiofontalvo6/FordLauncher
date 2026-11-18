@@ -1,6 +1,6 @@
 {
-  "version": "2.10.8",
-  "notes": "## FordLauncher 2.10.8 — Voz más fiable y llamadas por voz\n\n### Novedades\n- **Micrófono estable**: el reconocimiento de voz ya no se queda \"muerto\" tras un silencio ni se reabre solo. Se cancela con margen, se reintenta en silencio ante `ERROR_CLIENT` y se recrea el reconocedor.\n- **Sin activaciones duplicadas**: `onCreate`, `onNewIntent`, `onResume` y el botón del volante comparten un único punto de entrada, así que un comando ya no se procesa dos veces.\n- **Saludo de arranque por voz neuronal**: voz `es-MX-JorgeNeural` con precalentamiento del TTS y reproducción asíncrona, sin cortes ni fallback local.\n- **Llamadas por voz**: búsqueda de contactos con coincidencia aproximada, desambiguación hablada cuando hay varios candidatos y confirmación por voz antes de marcar.\n- **Comandos de voz locales**: abrir apps y pestañas del dock, entrar al Diagnóstico (con análisis por IA) y controlar la música de Seldia sin tocar la pantalla.\n- **OBD más robusto**: lectura en un solo hilo con timeouts, pausa del polling durante DTC/VIN y reconexión automática.\n- **Herramientas de depuración** por broadcast para probar voz, contactos y comandos en la pantalla del carro.\n\n### Correcciones\n- Errores tardíos del reconocedor ya no reactivan el micrófono después de terminar.\n- El aviso de \"escuchando\" se apaga correctamente al cancelar.\n",
-  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.8",
-  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.8/FordLauncher-2.10.8.apk"
+  "version": "2.10.9",
+  "notes": "",
+  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.9",
+  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.9/FordLauncher-2.10.9.apk"
 }
