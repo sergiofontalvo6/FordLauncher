@@ -1498,20 +1498,18 @@ public class Main extends Activity {
     }
 
     private boolean ejecutarAccionIa(String text) {
+        return ejecutarAccionIa(text, "");
+    }
+
+    private boolean ejecutarAccionIa(String text, String userSpeech) {
         if (text == null) return false;
+        android.util.Log.d("FordLauncher/AI", "raw=" + text);
         String t = text.trim();
-        if (t.startsWith("```")) {
-            int nl = t.indexOf('\n');
-            if (nl >= 0) t = t.substring(nl + 1);
-            int fence = t.lastIndexOf("```");
-            if (fence >= 0) t = t.substring(0, fence);
-            t = t.trim();
-        }
         int s = t.indexOf('{');
         int e = t.lastIndexOf('}');
-        if (s < 0 || e <= s) return false;
+        if (s < 0 || e <= s) return ejecutarMusicaPorTexto(t, userSpeech);
         String json = t.substring(s, e + 1);
-        if (!json.contains("\"action\"")) return false;
+        if (!json.contains("\"action\"")) return ejecutarMusicaPorTexto(t, userSpeech);
 
         String action = "", speech = "", appName = "", query = "";
         try {
@@ -1520,8 +1518,9 @@ public class Main extends Activity {
             speech = o.optString("speech", "").trim();
             appName = o.optString("app_name", "").trim();
             query = o.optString("query", "").trim();
-        } catch (Throwable ignored) {
-            return false;
+        } catch (Throwable parseError) {
+            android.util.Log.w("FordLauncher/AI", "JSON no válido=" + json, parseError);
+            return ejecutarMusicaPorTexto(t, userSpeech);
         }
 
         if ("MAKE_CALL".equalsIgnoreCase(action)) {
@@ -1553,24 +1552,10 @@ public class Main extends Activity {
             return true;
         }
         if ("PLAY_MUSIC".equalsIgnoreCase(action)) {
-            // Control multimedia por voz (Gemini): finaliza la escucha continua
-            // inmediatamente y reproduce en segundo plano sin reabrir el micrófono.
             String q = query;
             if ((q == null || q.trim().length() == 0)) q = appName;
             if ((q == null || q.trim().length() == 0)) q = speech;
-            final String qFinal = (q == null) ? "" : q.trim();
-            modoConversacionActivo = false;
-            if (fabVoice != null) { try { fabVoice.stopListening(); } catch (Throwable ignored) {} }
-            try {
-                com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSerMusic(Main.this, qFinal);
-            } catch (Throwable err) {
-                android.util.Log.w("FordLauncher/Music", "No se pudo lanzar SerMusic", err);
-            }
-            refrescarSesionMusica(500);
-            refrescarSesionMusica(1500);
-            refrescarSesionMusica(3000);
-            fabResponder(speech.length() > 0 ? speech : "Ok.", false);
-            return true;
+            return ejecutarMusicaEnSerMusic((q == null) ? "" : q.trim(), speech);
         }
         if ("OPEN_DOCK".equalsIgnoreCase(action)) {
             String item = appName.length() > 0 ? appName : query;
@@ -1597,6 +1582,64 @@ public class Main extends Activity {
             return true;
         }
         return false;
+    }
+
+    /** Gemini can answer with plain text instead of action JSON: never let a music request slip through. */
+    private boolean ejecutarMusicaPorTexto(String text, String userSpeech) {
+        String t = text == null ? "" : text.trim();
+        String u = userSpeech == null ? "" : userSpeech.trim();
+        String lower = t.toLowerCase(java.util.Locale.ROOT);
+        String ulower = u.toLowerCase(java.util.Locale.ROOT);
+        boolean geminiMusic =
+                lower.startsWith("poniendo ") || lower.startsWith("reproduciendo ") ||
+                lower.startsWith("sonando ") || lower.startsWith("tocando ") ||
+                (lower.contains("en sermusic") && (lower.contains("poniendo") || lower.contains("reproduciendo")));
+        boolean userMusic =
+                ulower.startsWith("pon ") || ulower.startsWith("pone ") || ulower.startsWith("ponme ") ||
+                ulower.startsWith("reproduce ") || ulower.startsWith("reproducir ") ||
+                ulower.startsWith("escuchar ") || ulower.startsWith("escucha ") ||
+                ulower.startsWith("toca ") || ulower.startsWith("tocar ");
+        if (!geminiMusic && !userMusic) return false;
+        String fuente = geminiMusic ? t : u;
+        String q = extraerConsultaMusica(fuente);
+        if (q.length() == 0) return false;
+        android.util.Log.i("FordLauncher/AI", "fallback PLAY_MUSIC query=\"" + q + "\"");
+        return ejecutarMusicaEnSerMusic(q, t.length() > 0 ? t : ("Poniendo " + q + " en SerMusic"));
+    }
+
+    private String extraerConsultaMusica(String fuente) {
+        String s = fuente == null ? "" : fuente.trim();
+        s = s.replaceFirst("(?i)^(poniendo|reproduciendo|sonando|tocando)\\s+", "");
+        s = s.replaceFirst("(?i)^(pon|pone|ponme|reproduce|reproducir|escuchar|escucha|toca|tocar|quiero escuchar|me gustar[íi]a escuchar)\\s+", "");
+        s = s.replaceFirst("(?i)^(una|la|el|un|las|los)\\s+", "");
+        s = s.replaceFirst("(?i)^(canci[óo]n|cancion|tema|m[úu]sica|musica|artista)\\s+(de\\s+)?", "");
+        s = s.replaceFirst("(?i)^(de\\s+)", "");
+        s = s.replaceFirst("(?i)\\s+(en|con|de)\\s+SerMusic\\s*$", "");
+        s = s.replaceFirst("(?i)\\s+en\\s+sermusic\\s*$", "");
+        s = s.replaceAll("\\s+", " ").trim();
+        while (s.length() > 0 && (s.endsWith("?") || s.endsWith(".") || s.endsWith("!"))) {
+            s = s.substring(0, s.length() - 1).trim();
+        }
+        return s;
+    }
+
+    private boolean ejecutarMusicaEnSerMusic(String query, String speech) {
+        if (query == null || query.trim().length() == 0) return false;
+        final String qFinal = query.trim();
+        // Voice control: stop the conversation loop before the music starts so the
+        // microphone cannot steal audio focus from SerMusic with onReadyForSpeech().
+        modoConversacionActivo = false;
+        if (fabVoice != null) { try { fabVoice.stopListening(); } catch (Throwable ignored) {} }
+        try {
+            com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSerMusic(Main.this, qFinal);
+        } catch (Throwable err) {
+            android.util.Log.w("FordLauncher/Music", "No se pudo lanzar SerMusic", err);
+        }
+        refrescarSesionMusica(500);
+        refrescarSesionMusica(1500);
+        refrescarSesionMusica(3000);
+        fabResponder(speech != null && speech.trim().length() > 0 ? speech.trim() : "Ok.", false);
+        return true;
     }
 
     private void fabAskAi(final String pregunta) {
@@ -1632,25 +1675,35 @@ public class Main extends Activity {
             public void onDone(final String text, final String error) {
                 h.post(new Runnable() {
                     public void run() {
-                        if (error != null || text == null) {
-                            endFabConversation();
-                            toast(error != null ? error : "Sin respuesta de la IA");
-                            return;
-                        }
-                        // The action JSON must be executed BEFORE limpiarParaVoz(): that helper
-                        // extracts only the "speech" field and destroys the action/query data.
-                        if (ejecutarAccionIa(text)) return;
-                        final String textoLimpio = com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(text);
-                        if (textoLimpio == null) {
-                            endFabConversation();
-                            toast("Sin respuesta de la IA");
-                            return;
-                        }
-                        fabResponder(textoLimpio, true);
+                        procesarRespuestaGemini(text, error, pregunta);
                     }
                 });
             }
         });
+    }
+
+    private void procesarRespuestaGemini(String text, String error, String userSpeech) {
+        if (error != null || text == null) {
+            endFabConversation();
+            toast(error != null ? error : "Sin respuesta de la IA");
+            return;
+        }
+        android.util.Log.d("FordLauncher/AI", "raw=" + text);
+        // Execute the action on the raw response: limpiarParaVoz() keeps only "speech"
+        // and would destroy the JSON action/query data.
+        if (ejecutarAccionIa(text, userSpeech)) return;
+        final String textoLimpio = com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(text);
+        if (textoLimpio == null) {
+            endFabConversation();
+            toast("Sin respuesta de la IA");
+            return;
+        }
+        fabResponder(textoLimpio, true);
+    }
+
+    boolean debugSimularGemini(String text, String userSpeech) {
+        procesarRespuestaGemini(text, null, userSpeech);
+        return true;
     }
 
     private Drawable getDrawableOrNull(String name) {

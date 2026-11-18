@@ -38,6 +38,8 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         String cmd = intent.getStringExtra("cmd");
         String resolve = intent.getStringExtra("resolve");
         String fmt = intent.getStringExtra("fmt");
+        String simResp = intent.getStringExtra("simresp");
+        String userSpeech = intent.getStringExtra("user_speech");
         // `am broadcast` interpreta las llaves del JSON como URI; para probar desde ADB
         // se puede enviar el mismo JSON en Base64 con el extra "json64".
         String j64 = intent.getStringExtra("json64");
@@ -46,9 +48,17 @@ public class DebugCommandReceiver extends BroadcastReceiver {
                 json = new String(android.util.Base64.decode(j64, android.util.Base64.NO_WRAP), "UTF-8");
             } catch (Throwable ignored) {}
         }
+        String sr64 = intent.getStringExtra("simresp64");
+        if (sr64 != null) {
+            try {
+                simResp = new String(android.util.Base64.decode(sr64, android.util.Base64.NO_WRAP), "UTF-8");
+            } catch (Throwable ignored) {}
+        }
         android.util.Log.i("FordLauncher/VoiceCmd", "debug json=" + json + " cmd=" + cmd
                 + " resolve=" + resolve + " fmt=" + fmt);
-        if (json != null) {
+        if (simResp != null) {
+            m.debugSimularGemini(simResp, userSpeech);
+        } else if (json != null) {
             boolean ok = m.debugEjecutarJson(json);
             android.util.Log.i("FordLauncher/VoiceCmd", "debug json ejecutado=" + ok);
         } else if (cmd != null) {
