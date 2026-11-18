@@ -221,6 +221,8 @@ public class GeminiDiagnosticClient {
                 + "{\"action\":\"OPEN_DIAGNOSTIC\",\"query\":\"pestaña o vacío\",\"speech\":\"Abriendo Diagnóstico\"}. "
                 + "Si pide analizar con IA, analizar los datos o hacer un diagnóstico inteligente, responde ÚNICAMENTE con este JSON: "
                 + "{\"action\":\"ANALYZE_AI\",\"query\":\"pestaña o vacío\",\"speech\":\"Analizando con IA\"}. "
+                + "Si pide volver al inicio, al home, a la pantalla principal o al menú principal del launcher, responde ÚNICAMENTE con este JSON: "
+                + "{\"action\":\"GO_HOME\",\"speech\":\"Volviendo al inicio\"}. "
                 + "No uses estas acciones para preguntas ni conversación; para todo lo demás responde texto normal.";
     }
 

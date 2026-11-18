@@ -1,11 +1,14 @@
 package com.fordlauncher.launcher.ai;
 
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import com.fordlauncher.launcher.DiagnosticoView;
+import com.fordlauncher.launcher.Main;
 import com.fordlauncher.launcher.obd.GeminiDiagnosticClient;
 import com.fordlauncher.launcher.obd.ObdRepository;
 import com.fordlauncher.launcher.obd.Pids;
@@ -44,6 +47,8 @@ public final class AssistantActionEngine {
         /** @return true si la acción se abrió correctamente. */
         boolean openDock(String key, String pendingJson);
         boolean openDiagnostic(int tab, boolean analizar, String pendingJson);
+        /** Vuelve al dashboard del launcher y cierra cualquier pestaña abierta. */
+        void goHome(String pendingJson);
     }
 
     private final Host host;
@@ -152,12 +157,34 @@ public final class AssistantActionEngine {
             return true;
         }
         if ("OPEN_APP".equalsIgnoreCase(action)) {
+            String target = appName.length() > 0 ? appName : query;
+            if (target.length() == 0) target = speech;
+            String nTarget = ContactNames.norm(target);
+            // "apps" no es una app externa: es el cajón del dock de FordLauncher.
+            if (esPedidoDeAppsDrawer(nTarget)) {
+                abrirCajonApps(json, speech.length() > 0 ? speech : "Abriendo aplicaciones");
+                return true;
+            }
+            // "radio" es el slot del dock, que ya lanza la app de radio de la radio.
+            if (esAliasRadio(nTarget)) {
+                abrirRadioDock(json, speech.length() > 0 ? speech : "Abriendo Radio");
+                return true;
+            }
+            // 100% en segundo plano: se lanza el intent desde el contexto del servicio,
+            // sin traer Main al frente ni enviar PENDING_ACTION_JSON.
             boolean ok = false;
-            try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, appName); } catch (Throwable ignored) {}
-            String decir;
-            if (!ok) decir = "No encontré la aplicación " + (appName.length() > 0 ? appName : "solicitada");
-            else decir = speech.length() > 0 ? speech : ("Abriendo " + appName);
+            try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, target); } catch (Throwable ignored) {}
+            if (!ok && target.length() == 0) {
+                try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, t.replaceAll("(?i)^abr(?:e|ir)\\s+", "")); }
+                catch (Throwable ignored) {}
+            }
+            String decir = ok ? (speech.length() > 0 ? speech : ("Abriendo " + target))
+                    : ("No encontré la aplicación " + (target.length() > 0 ? target : "solicitada"));
             host.speak(decir, false);
+            return true;
+        }
+        if ("GO_HOME".equalsIgnoreCase(action)) {
+            ejecutarGoHome(json, speech.length() > 0 ? speech : "Volviendo al inicio");
             return true;
         }
         if ("PLAY_MUSIC".equalsIgnoreCase(action)) {
@@ -226,6 +253,31 @@ public final class AssistantActionEngine {
         String t = ContactNames.norm(raw);
         if (t.length() == 0) return false;
         String rawLower = raw.trim().toLowerCase(Locale.ROOT);
+
+        // 0) Volver al home real antes que cualquier otra interpretación.
+        if (esPedidoDeHome(t)) {
+            ejecutarGoHome(null, "Volviendo al inicio");
+            return true;
+        }
+
+        // 0b) "apps / aplicaciones" es el cajón del dock, no una app externa.
+        if (esPedidoDeAppsDrawer(t)) {
+            abrirCajonApps(null, "Abriendo aplicaciones");
+            return true;
+        }
+        if (esAliasRadio(t)) {
+            abrirRadioDock(null, "Abriendo Radio");
+            return true;
+        }
+
+        // 0c) "abre <app>" conocida: launch directo desde el contexto del host.
+        String openTarget = quitarVerboAbrir(rawLower);
+        if (openTarget != null && openTarget.length() > 0 && dockKeyDe(t) == null
+                && AppLauncherHelper.buscarPaquete(ctx, openTarget) != null) {
+            boolean ok = AppLauncherHelper.abrirAppPorNombre(ctx, openTarget);
+            host.speak(ok ? ("Abriendo " + openTarget) : ("No encontré la aplicación " + openTarget), false);
+            return true;
+        }
 
         boolean pideAnalisis = t.contains("analiza") || t.contains("analisis");
         boolean pideDiag = contienePalabra(t, "diagnostico") || contienePalabra(t, "taller")
@@ -360,6 +412,85 @@ public final class AssistantActionEngine {
             o.put("speech", speech == null ? "" : speech);
             return o.toString();
         } catch (Throwable t) { return "{\"action\":\"" + action + "\"}"; }
+    }
+
+    /** Intento de sistema hacia el launcher principal, con la acción pendiente para cerrar pestañas. */
+    public static void launchHome(Context ctx, String pendingJson) {
+        if (ctx == null) return;
+        Intent home = new Intent(Intent.ACTION_MAIN);
+        home.addCategory(Intent.CATEGORY_HOME);
+        home.setComponent(new ComponentName(ctx, Main.class));
+        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (pendingJson != null && pendingJson.length() > 0) home.putExtra("PENDING_ACTION_JSON", pendingJson);
+        try {
+            ctx.startActivity(home);
+            Log.i(TAG, "GO_HOME -> " + Main.class.getName());
+        } catch (Throwable t) { Log.w(TAG, "GO_HOME no se pudo lanzar", t); }
+    }
+
+    private void ejecutarGoHome(String json, String decir) {
+        String pending = (json != null && json.length() > 0) ? json : pendingJson("GO_HOME", "", decir);
+        host.goHome(pending);
+        host.speak(decir, false);
+    }
+
+    private void abrirCajonApps(String json, String decir) {
+        String pending = (json != null && json.length() > 0) ? json : pendingJson("OPEN_DOCK", "apps", decir);
+        boolean ok = host.openDock("apps", pending);
+        if (host.runsUiLocally() || !ok) host.speak(decir, false);
+    }
+
+    private void abrirRadioDock(String json, String decir) {
+        String pending = (json != null && json.length() > 0) ? json : pendingJson("OPEN_DOCK", "radio", decir);
+        boolean ok = host.openDock("radio", pending);
+        if (host.runsUiLocally() || !ok) host.speak(decir, false);
+    }
+
+    private static boolean esPedidoDeHome(String t) {
+        if (t == null) return false;
+        String n = ContactNames.norm(t).trim();
+        if (n.length() == 0) return false;
+        String[] phrases = {"home", "inicio", "principal", "launcher", "escritorio", "casa",
+                "pantalla principal", "pantalla de inicio", "menu principal", "menu de inicio",
+                "volver al inicio", "volver inicio", "volver al home", "volver home", "volver al launcher",
+                "vuelve al inicio", "vuelve al home", "regresar al inicio", "regresar al home",
+                "regresa al inicio", "regresa al home", "regresar inicio", "regresar home",
+                "ir al inicio", "ir al home", "ir inicio", "ir home", "ir al launcher",
+                "volver a la pantalla principal", "regresar a la pantalla principal",
+                "ver el inicio", "mostrar el inicio", "llévame al inicio", "llevame al inicio"};
+        for (String p : phrases) if (n.equals(p)) return true;
+        return false;
+    }
+
+    private static boolean esPedidoDeAppsDrawer(String t) {
+        if (t == null) return false;
+        String n = ContactNames.norm(t).trim();
+        if (n.length() == 0) return false;
+        String[] phrases = {"apps", "aplicaciones", "aplicacion", "drawer",
+                "menu de aplicaciones", "menu apps", "cajon de aplicaciones", "lista de aplicaciones",
+                "todas las apps", "todas las aplicaciones", "todos los apps", "todos los aplicaciones",
+                "abrir apps", "abrir aplicaciones", "abre apps", "abre aplicaciones",
+                "ver apps", "ver aplicaciones", "mostrar apps", "mostrar aplicaciones"};
+        for (String p : phrases) if (n.equals(p)) return true;
+        return false;
+    }
+
+    private static boolean esAliasRadio(String t) {
+        if (t == null) return false;
+        String n = ContactNames.norm(t).trim();
+        return n.equals("radio") || n.equals("la radio") || n.equals("radio fm")
+                || n.equals("abrir radio") || n.equals("abre radio") || n.equals("fm")
+                || n.equals("emisora");
+    }
+
+    /** Extrae el nombre de app de "abre X", "inicia X", etc. (texto ya en minúsculas). */
+    private static String quitarVerboAbrir(String rawLower) {
+        if (rawLower == null) return null;
+        String s = rawLower.trim();
+        String[] verbs = {"abre ", "abrir ", "abreme ", "ábreme ", "inicia ", "iniciar ",
+                "lanza ", "lanzar ", "ejecuta ", "ejecutar ", "arranca ", "arrancar "};
+        for (String v : verbs) if (s.startsWith(v)) return s.substring(v.length()).trim();
+        return null;
     }
 
     private static boolean esImperativo(String t) {

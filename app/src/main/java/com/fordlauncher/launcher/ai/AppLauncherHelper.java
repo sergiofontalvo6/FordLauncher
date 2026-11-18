@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.util.Log;
 import java.text.Normalizer;
 import java.util.List;
@@ -31,6 +32,11 @@ public final class AppLauncherHelper {
         }
         PackageManager pm = context.getPackageManager();
         Intent launchIntent = pm.getLaunchIntentForPackage(pkg);
+        // En esta radio Maps no expone actividad LAUNCHER: se abre con un intent geo.
+        if (launchIntent == null && "com.google.android.apps.maps".equals(pkg)) {
+            launchIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0"));
+            launchIntent.setPackage(pkg);
+        }
         if (launchIntent != null) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
             try {
@@ -50,6 +56,13 @@ public final class AppLauncherHelper {
         if (q.length() == 0) return null;
 
         PackageManager pm = context.getPackageManager();
+
+        // Alias directos de la radio: se resuelven antes que cualquier búsqueda difusa.
+        String directo = paquetePorAlias(q);
+        if (directo != null && (pm.getLaunchIntentForPackage(directo) != null || paqueteInstalado(pm, directo))) {
+            return directo;
+        }
+
         List<ApplicationInfo> apps;
         try {
             apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
@@ -90,6 +103,13 @@ public final class AppLauncherHelper {
                 }
             }
 
+            // Coincidencia parcial por palabras: "google maps" también casa con "maps".
+            for (String token : q.split(" ")) {
+                if (token.length() < 3) continue;
+                if (label.contains(token)) puntaje = Math.max(puntaje, 60);
+                if (pkg.contains(token)) puntaje = Math.max(puntaje, 40);
+            }
+
             if (puntaje > mejorPuntaje) {
                 mejorPuntaje = puntaje;
                 mejorPkg = ai.packageName;
@@ -97,6 +117,24 @@ public final class AppLauncherHelper {
         }
 
         return mejorPuntaje >= 40 ? mejorPkg : null;
+    }
+
+    private static boolean paqueteInstalado(PackageManager pm, String pkg) {
+        try { pm.getPackageInfo(pkg, 0); return true; } catch (Throwable t) { return false; }
+    }
+
+    /** Alias fijos de las apps de la radio, sin tildes ni mayúsculas (ya normalizados). */
+    private static String paquetePorAlias(String q) {
+        if (q.equals("maps") || q.equals("google maps") || q.equals("mapa") || q.equals("mapas")
+                || q.equals("google mapas") || q.equals("navegacion")) return "com.google.android.apps.maps";
+        if (q.equals("waze") || q.equals("waze navigation") || q.equals("guaze")) return "com.waze";
+        if (q.equals("sermusic") || q.equals("ser music") || q.equals("musica")
+                || q.equals("reproductor de musica")) return "com.sermusic.app";
+        if (q.equals("youtube") || q.equals("google youtube")) return "com.google.android.youtube";
+        if (q.equals("radio") || q.equals("radio fm") || q.equals("la radio") || q.equals("fm")) {
+            return "com.hcn.autoradio";
+        }
+        return null;
     }
 
     private static String[] aliasKeywords(String q) {

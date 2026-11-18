@@ -347,8 +347,37 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (raw == null || raw.trim().length() == 0) return;
         try { i.removeExtra("PENDING_ACTION_JSON"); } catch (Throwable ignored) {}
         android.util.Log.i("FordLauncher/VoiceCmd", "PENDING_ACTION_JSON -> " + raw);
+        String action = "";
+        try { action = new org.json.JSONObject(raw).optString("action", "").trim(); }
+        catch (Throwable ignored) {}
+        if (action.length() == 0) {
+            android.util.Log.w("FordLauncher/VoiceCmd", "PENDING_ACTION_JSON sin action: se ignora (sin diagnóstico por defecto)");
+            return;
+        }
+        // GO_HOME lo resuelve Main directamente: cerrar pestañas sin volver a lanzar el intent.
+        if ("GO_HOME".equalsIgnoreCase(action)) {
+            cerrarPanelesParaHome();
+            return;
+        }
+        // Ninguna acción abre Diagnóstico salvo que lo pida explícitamente.
+        if (!"OPEN_DIAGNOSTIC".equalsIgnoreCase(action) && !"ANALYZE_AI".equalsIgnoreCase(action)
+                && !"OPEN_DOCK".equalsIgnoreCase(action)) {
+            android.util.Log.i("FordLauncher/VoiceCmd", "PENDING_ACTION_JSON acción de fondo en Main: " + action);
+        }
         try { assistant.ejecutarAccionIa(raw, ""); }
         catch (Throwable t) { android.util.Log.w("FordLauncher/VoiceCmd", "PENDING_ACTION_JSON falló", t); }
+    }
+
+    /** GO_HOME: deja visible el dashboard, cerrando diagnóstico, teléfono, ajustes y cajón de apps. */
+    private void cerrarPanelesParaHome() {
+        android.util.Log.i("FordLauncher/VoiceCmd", "GO_HOME paneles antes: diag=" + (workshopView != null)
+                + " phone=" + (phoneView != null) + " settings=" + (settingsView != null)
+                + " drawer=" + (drawer != null));
+        try { closeObdDiag(); } catch (Throwable ignored) {}
+        try { closePhone(); } catch (Throwable ignored) {}
+        try { closeSettings(); } catch (Throwable ignored) {}
+        try { closeDrawer(); } catch (Throwable ignored) {}
+        android.util.Log.i("FordLauncher/VoiceCmd", "GO_HOME -> dashboard principal (pestañas cerradas)");
     }
 
     // ───────────────────────── audio Bluetooth ─────────────────────────
@@ -1611,6 +1640,10 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     @Override public boolean openDiagnostic(int tab, boolean analizar, String pendingJson) {
         abrirDiagnostico(tab, analizar);
         return true;
+    }
+
+    @Override public void goHome(String pendingJson) {
+        cerrarPanelesParaHome();
     }
 
     boolean debugSimularGemini(String text, String userSpeech) {

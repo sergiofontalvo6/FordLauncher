@@ -305,4 +305,8 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         traerMainConAccion(pendingJson);
         return true; // Main abre la pestaña y dice la confirmación
     }
+
+    @Override public void goHome(String pendingJson) {
+        AssistantActionEngine.launchHome(this, pendingJson);
+    }
 }
