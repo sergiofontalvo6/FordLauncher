@@ -21,11 +21,19 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import com.fordlauncher.launcher.ai.AssistantActionEngine;
+
 /**
  * Botón flotante global del copiloto de voz: vive en primer plano y se dibuja sobre
  * cualquier app (SerMusic, Waze, Maps, Radio) con TYPE_APPLICATION_OVERLAY.
+ *
+ * <p>Todo el razonamiento (comandos locales, Gemini, acciones) se delega en
+ * {@link AssistantActionEngine}, el MISMO motor que usa {@link Main}. Las acciones
+ * de la UI del launcher se reenvían a Main con PENDING_ACTION_JSON; el resto
+ * (música, apps externas, llamadas, OBD, brillo) se ejecuta aquí sin sacar al
+ * usuario de la app que esté viendo.
  */
-public class VoiceOverlayService extends Service {
+public class VoiceOverlayService extends Service implements AssistantActionEngine.Host {
 
     private static final String TAG = "FordLauncher/VoiceOverlay";
     private static final String CHANNEL = "voice_overlay";
@@ -39,6 +47,7 @@ public class VoiceOverlayService extends Service {
     private View bubble;
     private com.fordlauncher.launcher.ai.AiFabAnimator anim;
     private com.fordlauncher.launcher.obd.VoiceInputManager voice;
+    private AssistantActionEngine assistant;
     private final Handler main = new Handler(Looper.getMainLooper());
     private float touchX, touchY;
     private float startX, startY;
@@ -69,6 +78,7 @@ public class VoiceOverlayService extends Service {
         super.onCreate();
         instance = this;
         running = true;
+        assistant = new AssistantActionEngine(this);
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         crearNotificacion();
         voice = new com.fordlauncher.launcher.obd.VoiceInputManager(this);
@@ -202,10 +212,7 @@ public class VoiceOverlayService extends Service {
         if (anim != null) anim.listening();
         voice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
             public void onQueryReady(String text) {
-                main.post(new Runnable() { public void run() {
-                    if (anim != null) anim.waiting();
-                    consultar(text);
-                }});
+                main.post(new Runnable() { public void run() { consultar(text); } });
             }
             public void onError(String msg) {
                 main.post(new Runnable() { public void run() { if (anim != null) anim.idle(); } });
@@ -216,36 +223,18 @@ public class VoiceOverlayService extends Service {
     /** Simulación ADB del flujo real: misma ruta que el toque del botón. */
     public void simularConsulta(String query) {
         if (query == null || query.trim().length() == 0) return;
-        if (anim != null) anim.waiting();
         consultar(query.trim());
     }
 
-    private void consultar(final String pregunta) {
-        String tarea = "El conductor pregunta por voz: \"" + pregunta + "\"";
-        com.fordlauncher.launcher.obd.GeminiDiagnosticClient.analyze(this, "{}", tarea, false,
-                new com.fordlauncher.launcher.obd.GeminiDiagnosticClient.Callback() {
-                    public void onDone(final String text, final String error) {
-                        main.post(new Runnable() { public void run() { procesar(text, error, pregunta); } });
-                    }
-                });
+    /** Prueba ADB de una respuesta Gemini cruda, sin depender de la nube. */
+    public void simularRespuesta(String raw, String userSpeech) {
+        if (assistant == null || raw == null) return;
+        assistant.procesarRespuestaGemini(raw, null, userSpeech == null ? "" : userSpeech);
     }
 
-    private void procesar(String text, String error, String pregunta) {
-        if (error != null || text == null) {
-            if (anim != null) anim.idle();
-            return;
-        }
-        com.fordlauncher.launcher.ai.VoiceActionParser.Action action =
-                com.fordlauncher.launcher.ai.VoiceActionParser.parse(text, pregunta);
-        if (action != null && "PLAY_MUSIC".equalsIgnoreCase(action.type)) {
-            if (voice != null) voice.stopListening();
-            com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSerMusic(this, action.query);
-            String decir = action.speech.length() > 0 ? action.speech : ("Poniendo " + action.query + " en SerMusic");
-            hablar(decir);
-            return;
-        }
-        String limpio = com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(text);
-        hablar(limpio == null ? "Sin respuesta" : limpio);
+    /** Mismo prompt, mismo snapshot y mismo motor que Main.fabAskAi(). */
+    private void consultar(final String pregunta) {
+        assistant.ask(pregunta);
     }
 
     private void hablar(String texto) {
@@ -253,5 +242,67 @@ public class VoiceOverlayService extends Service {
         com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).hablarTextoLargo(texto, new Runnable() {
             public void run() { main.post(new Runnable() { public void run() { if (anim != null) anim.idle(); } }); }
         });
+    }
+
+    /** Las acciones que necesitan UI del launcher se entregan a Main, que ya está en el mismo proceso. */
+    private void traerMainConAccion(String pendingJson) {
+        Log.i(TAG, "UI action -> Main PENDING_ACTION_JSON=" + pendingJson);
+        Intent i = new Intent(this, Main.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        i.putExtra("PENDING_ACTION_JSON", pendingJson);
+        try { startActivity(i); }
+        catch (Throwable t) { Log.w(TAG, "No se pudo traer Main al frente", t); }
+    }
+
+    // ---- AssistantActionEngine.Host: acciones en segundo plano aquí, UI en Main ----
+    @Override public Context context() { return this; }
+
+    @Override public void showText(String text) {
+        // La burbuja no tiene cuadro de texto; la confirmación se dice por TTS.
+    }
+
+    @Override public void speak(String text, boolean continuar) { hablar(text); }
+
+    @Override public void stopVoice() {
+        if (voice != null) { try { voice.stopListening(); } catch (Throwable ignored) {} }
+    }
+
+    @Override public void setConversationActive(boolean active) {
+        // El servicio no mantiene bucle conversacional; el micrófono se cierra solo.
+    }
+
+    @Override public void refreshMusicSession() {
+        // No hay UI de Main a la que actualizar el card de música mientras otra app está al frente.
+    }
+
+    @Override public void setWaiting() {
+        main.post(new Runnable() { public void run() { if (anim != null) anim.waiting(); } });
+    }
+
+    @Override public void setIdle() {
+        main.post(new Runnable() { public void run() { if (anim != null) anim.idle(); } });
+    }
+
+    @Override public void setSpeaking() {
+        main.post(new Runnable() { public void run() { if (anim != null) anim.speaking(); } });
+    }
+
+    @Override public void notifyUser(String text) {
+        // Los toasts del servicio se muestran sobre cualquier app.
+        try { android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show(); }
+        catch (Throwable ignored) {}
+    }
+
+    @Override public boolean runsUiLocally() { return false; }
+
+    @Override public boolean openDock(String key, String pendingJson) {
+        if (key == null) return false;
+        traerMainConAccion(pendingJson);
+        return true; // Main abre la pestaña y dice la confirmación
+    }
+
+    @Override public boolean openDiagnostic(int tab, boolean analizar, String pendingJson) {
+        traerMainConAccion(pendingJson);
+        return true; // Main abre la pestaña y dice la confirmación
     }
 }
