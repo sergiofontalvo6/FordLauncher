@@ -29,5 +29,11 @@ public class BootReceiver extends BroadcastReceiver {
         try {
             com.fordlauncher.launcher.obd.ObdForegroundService.start(context);
         } catch (Throwable ignored) {}
+        try {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                    android.provider.Settings.canDrawOverlays(context)) {
+                com.fordlauncher.launcher.VoiceOverlayService.start(context);
+            }
+        } catch (Throwable ignored) {}
     }
 }

@@ -40,6 +40,7 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         String fmt = intent.getStringExtra("fmt");
         String simResp = intent.getStringExtra("simresp");
         String userSpeech = intent.getStringExtra("user_speech");
+        String overlayQuery = intent.getStringExtra("overlay_query");
         // `am broadcast` interpreta las llaves del JSON como URI; para probar desde ADB
         // se puede enviar el mismo JSON en Base64 con el extra "json64".
         String j64 = intent.getStringExtra("json64");
@@ -56,7 +57,12 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         }
         android.util.Log.i("FordLauncher/VoiceCmd", "debug json=" + json + " cmd=" + cmd
                 + " resolve=" + resolve + " fmt=" + fmt);
-        if (simResp != null) {
+        if (overlayQuery != null) {
+            com.fordlauncher.launcher.VoiceOverlayService svc =
+                    com.fordlauncher.launcher.VoiceOverlayService.instance();
+            if (svc != null) svc.simularConsulta(overlayQuery);
+            else android.util.Log.w("FordLauncher/VoiceCmd", "overlay: servicio flotante no activo");
+        } else if (simResp != null) {
             m.debugSimularGemini(simResp, userSpeech);
         } else if (json != null) {
             boolean ok = m.debugEjecutarJson(json);

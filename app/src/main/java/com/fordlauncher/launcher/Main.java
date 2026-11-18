@@ -168,6 +168,14 @@ public class Main extends Activity {
         getWindow().setBackgroundDrawable(new ColorDrawable(BG));
         prefs = getSharedPreferences("launcher", MODE_PRIVATE);
         INSTANCE = this;
+        if (SDK >= 23 && !Settings.canDrawOverlays(this) &&
+                !prefs.getBoolean("overlay_permission_requested", false)) {
+            prefs.edit().putBoolean("overlay_permission_requested", true).apply();
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Throwable ignored) {}
+        }
         try {
             com.fordlauncher.launcher.ai.OilLifeManager.getInstance(this).addListener(new com.fordlauncher.launcher.ai.OilLifeManager.Listener() {
                 public void onOdometerChanged(float odometroKm) {
@@ -745,6 +753,10 @@ public class Main extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (SDK >= 23 && Settings.canDrawOverlays(this)) {
+            com.fordlauncher.launcher.VoiceOverlayService.start(this);
+            refreshFloatingAi();
+        }
         checkBrightnessAndSwitch();
         immersive();
         if (SDK >= 23 && !askedPerms) {
@@ -1335,6 +1347,9 @@ public class Main extends Activity {
         if (fabAi == null) return;
         boolean en = true;
         try { en = prefs.getBoolean("pref_enable_floating_ai_button", true); } catch (Throwable ignored) {}
+        // The global overlay replaces the launcher-local bubble: never show two buttons.
+        if (com.fordlauncher.launcher.VoiceOverlayService.isRunning() &&
+                SDK >= 23 && Settings.canDrawOverlays(this)) en = false;
         fabAi.setVisibility(en ? View.VISIBLE : View.GONE);
         if (fabAnim != null) {
             if (!en) { fabAnim.stop(); endFabConversation(); }
@@ -1588,20 +1603,9 @@ public class Main extends Activity {
     private boolean ejecutarMusicaPorTexto(String text, String userSpeech) {
         String t = text == null ? "" : text.trim();
         String u = userSpeech == null ? "" : userSpeech.trim();
-        String lower = t.toLowerCase(java.util.Locale.ROOT);
-        String ulower = u.toLowerCase(java.util.Locale.ROOT);
-        boolean geminiMusic =
-                lower.startsWith("poniendo ") || lower.startsWith("reproduciendo ") ||
-                lower.startsWith("sonando ") || lower.startsWith("tocando ") ||
-                (lower.contains("en sermusic") && (lower.contains("poniendo") || lower.contains("reproduciendo")));
-        boolean userMusic =
-                ulower.startsWith("pon ") || ulower.startsWith("pone ") || ulower.startsWith("ponme ") ||
-                ulower.startsWith("reproduce ") || ulower.startsWith("reproducir ") ||
-                ulower.startsWith("escuchar ") || ulower.startsWith("escucha ") ||
-                ulower.startsWith("toca ") || ulower.startsWith("tocar ");
-        if (!geminiMusic && !userMusic) return false;
-        String fuente = geminiMusic ? t : u;
-        String q = extraerConsultaMusica(fuente);
+        if (!com.fordlauncher.launcher.ai.VoiceActionParser.isMusicIntent(text, userSpeech)) return false;
+        String fuente = t.toLowerCase(java.util.Locale.ROOT).contains("sermusic") ? t : u;
+        String q = com.fordlauncher.launcher.ai.VoiceActionParser.extractMusicQuery(fuente);
         if (q.length() == 0) return false;
         android.util.Log.i("FordLauncher/AI", "fallback PLAY_MUSIC query=\"" + q + "\"");
         return ejecutarMusicaEnSerMusic(q, t.length() > 0 ? t : ("Poniendo " + q + " en SerMusic"));

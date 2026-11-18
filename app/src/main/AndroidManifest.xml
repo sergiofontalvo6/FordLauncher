@@ -78,6 +78,7 @@
         <provider android:name="com.fordlauncher.launcher.ApkProvider" android:authorities="${applicationId}.apk"
             android:exported="false" android:grantUriPermissions="true"/>
         <service android:name="com.fordlauncher.launcher.LogcatRecorderService" android:exported="false"/>
+        <service android:name="com.fordlauncher.launcher.VoiceOverlayService" android:exported="false" android:stopWithTask="false"/>
         <service android:name="com.fordlauncher.launcher.obd.ObdForegroundService"
             android:exported="false" android:stopWithTask="false"/>
         <receiver android:name="com.fordlauncher.launcher.DebugCommandReceiver" android:enabled="true" android:exported="true">
