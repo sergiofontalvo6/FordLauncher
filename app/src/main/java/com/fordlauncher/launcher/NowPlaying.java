@@ -48,7 +48,7 @@ public class NowPlaying {
         "com.sonyericsson.music.metachanged", "com.rdio.android.metachanged",
         "com.samsung.sec.android.MusicPlayer.metachanged", "com.nullsoft.winamp.metachanged",
         "org.videolan.vlc.metachanged",
-        "com.seldia.music.metachanged", "com.seldia.music.playstatechanged",
+        "com.sermusic.app.metachanged", "com.sermusic.app.playstatechanged",
         // Bluetooth (AVRCP) de Android y de radios chinas conocidas
         "android.bluetooth.avrcp-controller.profile.action.TRACK_EVENT",
         "com.android.bluetooth.a2dpsink.action.METADATA_CHANGED",

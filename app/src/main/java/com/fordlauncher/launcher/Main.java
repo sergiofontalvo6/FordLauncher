@@ -210,6 +210,7 @@ public class Main extends Activity {
         } catch (Throwable ignored) {}
 
         // Si el servicio abrió el launcher para pedir la voz, se atiende al reanudar.
+        if (handleMusicSearchIntent(getIntent())) return;
         if (getIntent() != null && getIntent().getBooleanExtra(VoiceTrigger.EXTRA_VOICE, false)) {
             pendingVoiceOnResume = true;
             try { getIntent().removeExtra(VoiceTrigger.EXTRA_VOICE); } catch (Throwable ignored) {}
@@ -815,6 +816,20 @@ public class Main extends Activity {
     /** Evita arranques duplicados del micrófono entre onCreate/onNewIntent/onResume/SWC. */
     private long ultimoInicioVozMs;
 
+    /** Voice assistant music request: forward it to SerMusic instead of handling it here. */
+    private boolean handleMusicSearchIntent(Intent i) {
+        if (i == null || !"android.media.action.MEDIA_PLAY_FROM_SEARCH".equals(i.getAction())) return false;
+        String query = i.getStringExtra(android.app.SearchManager.QUERY);
+        if (query == null || query.trim().length() == 0) return false;
+        query = query.trim();
+        try {
+            android.util.Log.w("FordLauncher/TTS", "Poniendo una canción de " + query + " en SerMusic");
+        } catch (Throwable ignored) {}
+        boolean ok = com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSerMusic(this, query);
+        if (ok) finish();
+        return ok;
+    }
+
     /** ¿El intent corresponde a una invocación del asistente/voz del sistema? */
     private boolean isVoiceAssistIntent(Intent i) {
         if (i == null) return false;
@@ -968,6 +983,7 @@ public class Main extends Activity {
 
     @Override
     protected void onNewIntent(Intent i) {
+        if (handleMusicSearchIntent(i)) return;
         super.onNewIntent(i);
         closeDrawer();
         if (i != null) {
@@ -2570,7 +2586,7 @@ public class Main extends Activity {
         if (t == null || t.length() == 0) return null;
         if (contienePalabra(t, "radio") || contienePalabra(t, "fm") || t.contains("emisora")) return "radio";
         if (contienePalabra(t, "bluetooth") || contienePalabra(t, "bt")) return "bluetooth";
-        if (contienePalabra(t, "musica") || contienePalabra(t, "music") || contienePalabra(t, "seldia")) return "musica";
+        if (contienePalabra(t, "musica") || contienePalabra(t, "music") || contienePalabra(t, "sermusic")) return "musica";
         if (contienePalabra(t, "telefono") || contienePalabra(t, "llamadas") || contienePalabra(t, "marcador")
                 || contienePalabra(t, "contactos")) return "telefono";
         if (contienePalabra(t, "apps") || contienePalabra(t, "aplicaciones") || contienePalabra(t, "aplicacion")
@@ -2672,7 +2688,7 @@ public class Main extends Activity {
             return true;
         }
 
-        // 2) Reproducir música en segundo plano (sin traer Seldia al frente)
+        // 2) Reproducir música en SerMusic (sin traerla al frente)
         String[] musicVerbs = {"reproduce ", "reproducir ", "ponme ", "pon ", "toca ", "tocar ",
                 "escuchar ", "quiero escuchar ", "pon la musica ", "pon musica ", "pon la cancion ",
                 "pon la canción ", "buscar cancion ", "buscar canción ", "busca la cancion ",
@@ -2740,7 +2756,7 @@ public class Main extends Activity {
         return false;
     }
 
-    /** Reengancha el MediaController activo (Seldia, etc.) para pintar el card de música sin esperar callbacks. */
+    /** Reengancha el MediaController activo (SerMusic, etc.) para pintar el card de música sin esperar callbacks. */
     private void refrescarSesionMusica(long delayMs) {
         try {
             h.postDelayed(new Runnable() {
@@ -3020,12 +3036,6 @@ public class Main extends Activity {
                 if (idle && code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) { openSlot(2); return; }
                 final String beforeTitle = curTitle;
                 final boolean isSkip = (which != 0);
-                // Seldia Music: su skip por MediaSession no avanza (cola de 1). Usa sus acciones internas.
-                if (isSeldia() && sendSeldiaCommand(which)) {
-                    done = true;
-                    h.postDelayed(new Runnable() { public void run() { updatePlayIcon(); if (mediaWatcher != null) mediaWatcher.start(); } }, 600);
-                    return;
-                }
                 if (mediaWatcher != null) {
                     try { done = mediaWatcher.command(which); } catch (Throwable ignored) { }
                 }
@@ -3036,9 +3046,7 @@ public class Main extends Activity {
                         public void run() {
                             String nowTitle = curTitle;
                             if (beforeTitle != null && beforeTitle.equals(nowTitle)) {
-                                if (isSeldia()) {
-                                    if (!sendSeldiaCommand(which)) sendMediaKey(code);
-                                } else if (!sendBtCommand(code)) sendMediaKey(code);
+                                if (!sendBtCommand(code)) sendMediaKey(code);
                                 if (mediaWatcher != null) mediaWatcher.start();
                             }
                             updatePlayIcon();
@@ -3047,26 +3055,6 @@ public class Main extends Activity {
                 }
             }
         };
-    }
-
-    private boolean isSeldia() {
-        if ("com.seldia.music".equals(curPkg)) return true;
-        return curSource != null && curSource.toLowerCase().contains("seldia");
-    }
-
-    /** Acciones internas de Seldia Music (PlaybackActionReceiver). Requiere receiver exportado en Seldia. */
-    private boolean sendSeldiaCommand(int which) {
-        String action = which == 1 ? "com.seldia.music.action.NEXT"
-                : which == -1 ? "com.seldia.music.action.PREVIOUS"
-                : "com.seldia.music.action.PLAY_PAUSE";
-        try {
-            Intent i = new Intent(action);
-            i.setPackage("com.seldia.music");
-            sendBroadcast(i);
-            return true;
-        } catch (Throwable e) {
-            return false;
-        }
     }
 
     /** Si suena Bluetooth, controla directamente la app Bluetooth de fábrica (com.clw.btmusic). */
@@ -3907,14 +3895,14 @@ public class Main extends Activity {
             BG = 0xFF15171C; CARD = 0xFF1E2128; INNER = 0xFF262A33; BTN = 0xFF2A2E37; DOCK = 0xFF0D0E11;
             TEXT = 0xFFF2F3F5; MUTED = 0xFF8B9099; SOFT = 0xFFC5C8CE; CIRCLE = 0xFF23262E; ICON = 0xFFFFFFFF;
         }
-        syncThemeToSeldia();
+        syncThemeToSerMusic();
     }
 
-    /** Envía el tema actual a Seldia Music (si está instalada) para que lo aplique. */
-    private void syncThemeToSeldia() {
+    /** Envía el tema actual a SerMusic (si está instalada) para que lo aplique. */
+    private void syncThemeToSerMusic() {
         try {
             Intent i = new Intent("com.fordlauncher.launcher.action.APPLY_THEME");
-            i.setPackage("com.seldia.music");
+            i.setPackage("com.sermusic.app");
             i.putExtra("theme", LIGHT ? "light" : "dark");
             sendBroadcast(i);
         } catch (Throwable ignored) {}
@@ -4911,12 +4899,12 @@ public class Main extends Activity {
         String key = SLOTS[idx][0];
         if ("music".equals(key)) {
             try {
-                Intent si = getPackageManager().getLaunchIntentForPackage("com.seldia.music");
+                Intent si = getPackageManager().getLaunchIntentForPackage("com.sermusic.app");
                 if (si != null) {
                     si.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     si.putExtra("com.fordlauncher.theme", LIGHT ? "light" : "dark");
                     startActivity(si);
-                    syncThemeToSeldia();
+                    syncThemeToSerMusic();
                     return;
                 }
             } catch (Throwable ignored) {}

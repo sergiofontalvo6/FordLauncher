@@ -122,7 +122,7 @@ public final class AppLauncherHelper {
         if (q.contains("spotify")) return new String[]{"spotify"};
         if (q.contains("radio")) return new String[]{"radio"};
         if (q.contains("musica") || q.contains("cancion") || q.contains("reproductor")) {
-            return new String[]{"seldia", "music", "musica"};
+            return new String[]{"sermusic", "music", "musica"};
         }
         return new String[]{q};
     }
