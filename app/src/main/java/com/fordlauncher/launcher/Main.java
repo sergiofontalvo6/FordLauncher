@@ -1562,21 +1562,14 @@ public class Main extends Activity {
             modoConversacionActivo = false;
             if (fabVoice != null) { try { fabVoice.stopListening(); } catch (Throwable ignored) {} }
             try {
-                if (com.fordlauncher.launcher.ai.AppExecutors.get().network != null) {
-                    com.fordlauncher.launcher.ai.AppExecutors.get().network.execute(new Runnable() {
-                        public void run() {
-                            try { com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(Main.this, qFinal); }
-                            catch (Throwable ignored) {}
-                        }
-                    });
-                } else {
-                    com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSegundoPlano(this, qFinal);
-                }
-            } catch (Throwable ignored) {}
+                com.fordlauncher.launcher.ai.MusicVoiceController.reproducirEnSerMusic(Main.this, qFinal);
+            } catch (Throwable err) {
+                android.util.Log.w("FordLauncher/Music", "No se pudo lanzar SerMusic", err);
+            }
             refrescarSesionMusica(500);
             refrescarSesionMusica(1500);
             refrescarSesionMusica(3000);
-            fabResponder("Ok.", false);
+            fabResponder(speech.length() > 0 ? speech : "Ok.", false);
             return true;
         }
         if ("OPEN_DOCK".equalsIgnoreCase(action)) {
@@ -1644,13 +1637,15 @@ public class Main extends Activity {
                             toast(error != null ? error : "Sin respuesta de la IA");
                             return;
                         }
+                        // The action JSON must be executed BEFORE limpiarParaVoz(): that helper
+                        // extracts only the "speech" field and destroys the action/query data.
+                        if (ejecutarAccionIa(text)) return;
                         final String textoLimpio = com.fordlauncher.launcher.obd.GeminiDiagnosticClient.limpiarParaVoz(text);
                         if (textoLimpio == null) {
                             endFabConversation();
                             toast("Sin respuesta de la IA");
                             return;
                         }
-                        if (ejecutarAccionIa(textoLimpio)) return;
                         fabResponder(textoLimpio, true);
                     }
                 });
