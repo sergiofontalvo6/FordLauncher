@@ -36,6 +36,14 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         // Hook de pruebas: simula una alerta crítica real (notificación + banner
         // flotante + TTS offline) sin adaptador OBD ni conexión a internet.
         //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es alert test_temp
+        // Hook de pruebas: comprueba la detección de red que usan voz y copiloto.
+        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es net_check 1
+        String netCheck = intent.getStringExtra("net_check");
+        if (netCheck != null) {
+            android.util.Log.i("FordLauncher/VoiceCmd", "net_check isNetworkAvailable="
+                    + com.fordlauncher.launcher.Net.isNetworkAvailable(context));
+            return;
+        }
         String alert = intent.getStringExtra("alert");
         if (alert != null) {
             android.util.Log.i("FordLauncher/VoiceCmd", "debug: alerta simulada " + alert);

@@ -10,6 +10,9 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
 import android.widget.Toast;
+
+import com.fordlauncher.launcher.Net;
+
 import java.util.ArrayList;
 
 /**
@@ -34,10 +37,15 @@ public class VoiceInputManager {
     }
 
     private static final String TAG = "FordLauncher/VoiceInput";
+    /** Aviso que se lee por TTS cuando no hay paquete offline de español instalado. */
+    public static final String MSG_SIN_PAQUETE_OFFLINE =
+            "Falta descargar el paquete de voz español sin conexión en los ajustes de Google";
     /** Margen para que el HAL/MCU libere el canal de captura tras VOICE_ASSIST. */
     private static final long LIBERAR_CANAL_MS = 320L;
     /** Espera del reintento silencioso tras ERROR_CLIENT (5). */
     private static final long RETRY_CLIENT_MS = 400L;
+    /** Espera del reintento en modo offline tras ERROR_NETWORK. */
+    private static final long RETRY_NETWORK_MS = 500L;
 
     private SpeechRecognizer recognizer;
     private final Context ctx;
@@ -50,6 +58,9 @@ public class VoiceInputManager {
     /** true tras stopListening/cancel: ignora errores tardíos y no reintenta. */
     private volatile boolean detenido;
     private int retryClient;
+    private int retryNetwork;
+    /** true cuando el micrófono debe usar EXTRA_PREFER_OFFLINE (sin Wi-Fi o tras error de red). */
+    private volatile boolean forzarOffline;
     private int generacion;
     private Runnable arranquePendiente;
     private Runnable reintentoPendiente;
@@ -103,6 +114,9 @@ public class VoiceInputManager {
         }
         final int gen = ++generacion;
         retryClient = 0;
+        retryNetwork = 0;
+        forzarOffline = !Net.isNetworkAvailable(ctx);
+        Log.i(TAG, "startListening -> red=" + (forzarOffline ? "sin conexión (offline)" : "conectada"));
         detenido = false;
         cancelarArranquePendiente();
         cancelarReintentoPendiente();
@@ -132,7 +146,9 @@ public class VoiceInputManager {
             recognizer.setRecognitionListener(construirListener(callback));
             listening = true;
             errorPrevio = false;
-            Log.i(TAG, "startListening -> startListening(intent) lang=es-CO free=1 max=1 minSilence=1200");
+            Log.i(TAG, "startListening -> startListening(intent) lang="
+                    + (forzarOffline ? "es-US" : "es-CO") + " preferOffline=" + forzarOffline
+                    + " free=1 max=1 minSilence=1200");
             recognizer.startListening(construirIntent());
         } catch (Throwable t) {
             listening = false;
@@ -145,7 +161,14 @@ public class VoiceInputManager {
     private Intent construirIntent() {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-CO");
+        // Sin red, obliga al SpeechRecognizer a usar el modelo descargado en el
+        // dispositivo. es-US/es-ES son los paquetes offline de Google en la radio.
+        boolean offline = forzarOffline || !Net.isNetworkAvailable(ctx);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, offline ? "es-US" : "es-CO");
+        if (offline) {
+            intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+            Log.i(TAG, "Intent EXTRA_PREFER_OFFLINE=true");
+        }
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         // Cierres de turno estrictos: el reconocimiento finaliza rápido cuando el
@@ -173,22 +196,35 @@ public class VoiceInputManager {
                     Log.i(TAG, "onError code=" + error + " ignorado (escucha detenida)");
                     return;
                 }
-                Log.i(TAG, "onError code=" + error + " retryClient=" + retryClient);
+                Log.i(TAG, "onError code=" + error + " retryClient=" + retryClient
+                        + " retryNetwork=" + retryNetwork + " offline=" + forzarOffline);
+                // Sin internet, el reconocedor de nube falla con ERROR_NETWORK:
+                // se reintenta UNA vez forzando el modelo offline descargado.
+                if (error == SpeechRecognizer.ERROR_NETWORK
+                        || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
+                    if (retryNetwork == 0) {
+                        retryNetwork = 1;
+                        forzarOffline = true;
+                        programarReintento(callback, RETRY_NETWORK_MS, "ERROR_NETWORK -> reintento offline");
+                        return;
+                    }
+                    if (callback != null) callback.onError(MSG_SIN_PAQUETE_OFFLINE);
+                    return;
+                }
+                // Idioma no instalado en el paquete offline de Google.
+                if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+                    if (callback != null) callback.onError(MSG_SIN_PAQUETE_OFFLINE);
+                    return;
+                }
                 // ERROR_CLIENT (5) en el primer intento tras el botón del volante:
                 // reintento silencioso recreando el reconocedor, sin avisar en pantalla.
                 if (error == SpeechRecognizer.ERROR_CLIENT && retryClient == 0) {
                     retryClient = 1;
-                    final int gen = generacion;
-                    Log.i(TAG, "ERROR_CLIENT(5) -> reintento silencioso en " + RETRY_CLIENT_MS + " ms");
-                    reintentoPendiente = new Runnable() {
-                        public void run() {
-                            reintentoPendiente = null;
-                            if (gen != generacion || detenido) return;
-                            Log.i(TAG, "reintento silencioso -> recreando SpeechRecognizer");
-                            abrirMicrofono(callback);
-                        }
-                    };
-                    main.postDelayed(reintentoPendiente, RETRY_CLIENT_MS);
+                    programarReintento(callback, RETRY_CLIENT_MS, "ERROR_CLIENT(5) -> reintento silencioso");
+                    return;
+                }
+                if (error == SpeechRecognizer.ERROR_CLIENT && forzarOffline) {
+                    if (callback != null) callback.onError(MSG_SIN_PAQUETE_OFFLINE);
                     return;
                 }
                 if (esSilencio(error) && onSilence != null) onSilence.run();
@@ -214,6 +250,22 @@ public class VoiceInputManager {
             public void onPartialResults(Bundle partialResults) { }
             public void onEvent(int eventType, Bundle params) { }
         };
+    }
+
+    /** Reabre el micrófono con un SpeechRecognizer nuevo tras un error recuperable. */
+    private void programarReintento(final VoiceCallback callback, long retardo, String motivo) {
+        final int gen = generacion;
+        Log.i(TAG, motivo + " en " + retardo + " ms");
+        cancelarReintentoPendiente();
+        reintentoPendiente = new Runnable() {
+            public void run() {
+                reintentoPendiente = null;
+                if (gen != generacion || detenido) return;
+                recrearReconocedor();
+                abrirMicrofono(callback);
+            }
+        };
+        main.postDelayed(reintentoPendiente, retardo);
     }
 
     private void cancelarArranquePendiente() {

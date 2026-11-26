@@ -1,6 +1,11 @@
 package com.fordlauncher.launcher;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
+import android.os.Build;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -33,6 +38,29 @@ public class Net {
     /** Fábrica propia (IPv4 + TLS 1.2) para reuso (Edge TTS); null si no está inicializada. */
     public static SSLSocketFactory customFactory() { return factory; }
     static String initInfo = "sin iniciar";
+
+    /**
+     * true solo cuando hay una red activa con capacidad de internet. Lo usan el
+     * reconocedor de voz y el copiloto para no depender de Gemini sin Wi-Fi.
+     */
+    public static boolean isNetworkAvailable(Context c) {
+        if (c == null) return false;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network red = cm.getActiveNetwork();
+                if (red != null) {
+                    NetworkCapabilities cap = cm.getNetworkCapabilities(red);
+                    if (cap != null && cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return true;
+                }
+            }
+            NetworkInfo info = cm.getActiveNetworkInfo();
+            return info != null && info.isConnected();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     public static synchronized void init(Context c) {
         // En pantallas con Tethering/hotspot y emuladores hay IPv6 sin ruta (2606:...):

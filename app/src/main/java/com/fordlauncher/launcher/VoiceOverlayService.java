@@ -452,7 +452,15 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
                 main.post(new Runnable() { public void run() { consultar(text); } });
             }
             public void onError(String msg) {
-                main.post(new Runnable() { public void run() { if (anim != null) anim.idle(); } });
+                main.post(new Runnable() {
+                    public void run() {
+                        if (anim != null) anim.idle();
+                        // El aviso del paquete offline debe oírse aunque ninguna app
+                        // muestre texto (el servicio flotante no tiene cuadro propio).
+                        if (com.fordlauncher.launcher.obd.VoiceInputManager.MSG_SIN_PAQUETE_OFFLINE.equals(msg)
+                                || "Reconocimiento de voz no disponible".equals(msg)) hablar(msg);
+                    }
+                });
             }
         });
     }

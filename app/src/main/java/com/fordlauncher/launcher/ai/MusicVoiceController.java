@@ -27,6 +27,14 @@ public final class MusicVoiceController {
 
     /** Abre SerMusic con la búsqueda indicada (camino explícito y fallback del asistente). */
     public static boolean reproducirEnSerMusic(Context context, String query) {
+        return reproducirEnSerMusic(context, query, false);
+    }
+
+    /**
+     * Igual que {@link #reproducirEnSerMusic(Context, String)} pero, sin internet,
+     * marca la orden para que SerMusic solo busque en la música descargada.
+     */
+    public static boolean reproducirEnSerMusic(Context context, String query, boolean offlineOnly) {
         if (context == null) return false;
         String q = query == null ? "" : query.trim();
         if (q.length() == 0) return false;
@@ -34,10 +42,12 @@ public final class MusicVoiceController {
         Intent intent = new Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH);
         intent.setPackage(SERMUSIC_PACKAGE);
         intent.putExtra(SearchManager.QUERY, q);
+        if (offlineOnly) intent.putExtra("offline_only", true);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(intent);
-            Log.i(TAG, "PLAY_MUSIC -> " + SERMUSIC_PACKAGE + " query=\"" + q + "\"");
+            Log.i(TAG, "PLAY_MUSIC -> " + SERMUSIC_PACKAGE + " query=\"" + q
+                    + "\" offline_only=" + offlineOnly);
             return true;
         } catch (Exception e) {
             Log.w(TAG, "SerMusic no respondió a MEDIA_PLAY_FROM_SEARCH", e);

@@ -13,11 +13,14 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
 import android.util.Log;
+import com.fordlauncher.launcher.Net;
 import com.fordlauncher.launcher.obd.EdgeVoiceSpeaker;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 
@@ -37,11 +40,21 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private static final String TAG = "FordLauncher/TTS";
     private static final String PREFS = "launcher";
     private static final String KEY_VOICE = "tts_voice";
+    /** Voz local efectiva (misma timbre online y offline cuando no hay voz de nube elegida). */
+    private static final String KEY_VOICE_LOCAL = "tts_voice_local";
     private static final String EDGE_PREFIX = "edge:";
     private static final String LAST_CHUNK = "last_chunk_";
     private static final long INIT_TIMEOUT_MS = 12000L;
-    private static final float PITCH_LOCAL = 0.85f;
+    private static final float PITCH_LOCAL = 1.02f;
     private static final float RATE_LOCAL = 0.98f;
+
+    /** Voces naturales femeninas instaladas por Google TTS, en orden de preferencia. */
+    private static final String[] VOCES_FEMENINAS_LOCALES = {
+            "es-us-x-sfb#female_1-local", "es-us-x-sfb#female_2-local", "es-us-x-sfb-local",
+            "es-es-x-ana#female_1-local", "es-es-x-ana#female_2-local", "es-es-x-ana-local",
+            "es-mx-x-sfb#female_1-local", "es-mx-x-sfb-local",
+            "es-co-x-sfb#female_1-local", "es-co-x-sfb-local"
+    };
     private static TextToSpeechManager instance;
 
     private final Context context;
@@ -118,7 +131,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             if (!isInitialized && !initializing) inicializarMotor();
         } catch (Throwable ignored) {}
         final String nube = vozNubePreferida();
-        if (nube == null) return;
+        // Sin red no se prepara la nube: se usa directamente la voz local femenina.
+        if (nube == null || !Net.isNetworkAvailable(context)) return;
         new Thread(new Runnable() {
             public void run() {
                 // Resuelve certificados/roots y la fábrica TLS (IPv4) fuera del
@@ -234,6 +248,16 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         return v;
     }
 
+    /** Voz local efectiva ya persistida; garantiza el mismo timbre online y offline. */
+    public String vozLocalEfectiva() {
+        try { return prefs.getString(KEY_VOICE_LOCAL, null); } catch (Throwable t) { return null; }
+    }
+
+    private void guardarVozLocal(String nombre) {
+        if (nombre == null || nombre.trim().length() == 0) return;
+        try { prefs.edit().putString(KEY_VOICE_LOCAL, nombre).apply(); } catch (Throwable ignored) {}
+    }
+
     /** Nombre corto de la voz de nube (p. ej. es-MX-JorgeNeural) o null. */
     private String vozNubePreferida() {
         String v = prefs.getString(KEY_VOICE, null);
@@ -245,54 +269,66 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     private void configurarVozSegunPreferencias() {
         String preferida = vozLocalPreferida();
-        boolean asignada = false;
+        String persistida = vozLocalEfectiva();
+        Voice elegida = null;
         if (Build.VERSION.SDK_INT >= 21) {
             try {
                 Set<Voice> voces = tts.getVoices();
                 if (voces != null && !voces.isEmpty()) {
+                    Map<String, Voice> indice = new HashMap<String, Voice>();
                     for (Voice v : voces) {
                         try {
                             Log.i(TAG, "Voz disponible: " + v.getName()
                                     + " locale=" + v.getLocale()
                                     + " requiereRed=" + v.isNetworkConnectionRequired());
                         } catch (Throwable ignored) {}
+                        if (esVozLocal(v)) indice.put(v.getName().toLowerCase(Locale.ROOT), v);
                     }
-                    if (preferida != null) {
-                        for (Voice v : voces) {
-                            if (!esVozLocal(v)) continue;
-                            if (v.getName().equalsIgnoreCase(preferida)) {
-                                tts.setVoice(v);
-                                asignada = true;
-                                Log.i(TAG, "Voz local preferida: " + v.getName());
-                                break;
-                            }
+                    // 1) la voz que el usuario eligió, 2) la ya persistida, 3)
+                    //    female_1/female_2 natural de Google, 4) cualquier femenina.
+                    if (preferida != null) elegida = indice.get(preferida.toLowerCase(Locale.ROOT));
+                    if (elegida == null && persistida != null) elegida = indice.get(persistida.toLowerCase(Locale.ROOT));
+                    if (elegida == null) {
+                        for (String nombre : VOCES_FEMENINAS_LOCALES) {
+                            elegida = indice.get(nombre.toLowerCase(Locale.ROOT));
+                            if (elegida != null) break;
                         }
                     }
-                    if (!asignada) {
-                        for (Voice v : voces) {
-                            if (!esVozLocal(v)) continue;
+                    if (elegida == null) {
+                        for (Voice v : indice.values()) {
                             Locale loc = v.getLocale();
                             if (loc == null || !"es".equals(loc.getLanguage())) continue;
-                            String n = v.getName().toLowerCase(Locale.ROOT);
-                            if (n.contains("male") || n.contains("jorge") || n.contains("carlos")
-                                    || n.contains("-b-") || n.contains("-d-")) {
-                                tts.setVoice(v);
-                                asignada = true;
-                                Log.i(TAG, "Voz masculina en español (local): " + v.getName());
+                            if (v.getName().toLowerCase(Locale.ROOT).contains("female")) {
+                                elegida = v;
                                 break;
                             }
                         }
+                    }
+                    if (elegida == null) {
+                        for (Voice v : indice.values()) {
+                            Locale loc = v.getLocale();
+                            if (loc != null && "es".equals(loc.getLanguage())) {
+                                elegida = v;
+                                break;
+                            }
+                        }
+                    }
+                    if (elegida != null) {
+                        tts.setVoice(elegida);
+                        guardarVozLocal(elegida.getName());
+                        Log.i(TAG, "Voz femenina local persistida (online/offline): " + elegida.getName());
                     }
                 }
             } catch (Exception e) {
                 Log.w(TAG, "No se pudo consultar el catálogo de voces: " + e);
             }
         }
-        if (!asignada) {
+        if (elegida == null) {
             int r = tts.setLanguage(new Locale("es", "MX"));
             if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
                 tts.setLanguage(new Locale("es", "ES"));
             }
+            Log.w(TAG, "No hay voz femenina local; se usa el idioma por defecto");
         }
         tts.setPitch(PITCH_LOCAL);
         tts.setSpeechRate(RATE_LOCAL);
@@ -354,8 +390,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         // offline=true: nunca se intenta Edge/nube, aunque la voz configurada
         // sea "Nube · ...". La alerta debe sonar sin internet.
         if (!offline) {
+            boolean sinRed = !Net.isNetworkAvailable(context);
             String nube = vozNubePreferida();
-            if (nube != null && hablarNube(nube, limpio)) return;
+            if (nube != null && !sinRed && hablarNube(nube, limpio)) return;
+            if (sinRed) offline = true;
         }
         hablarLocal(limpio, offline);
     }

@@ -1488,6 +1488,9 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
                 // Error de micrófono distinto: cerrar bucle y avisar.
                 endFabConversation();
                 toast(msg);
+                if (com.fordlauncher.launcher.obd.VoiceInputManager.MSG_SIN_PAQUETE_OFFLINE.equals(msg)) {
+                    com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this).hablarTextoLargo(msg);
+                }
             }
         });
         if (fabAnim != null) fabAnim.waiting();

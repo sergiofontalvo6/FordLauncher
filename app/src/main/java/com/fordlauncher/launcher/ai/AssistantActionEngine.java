@@ -9,6 +9,7 @@ import android.util.Log;
 
 import com.fordlauncher.launcher.DiagnosticoView;
 import com.fordlauncher.launcher.Main;
+import com.fordlauncher.launcher.Net;
 import com.fordlauncher.launcher.obd.GeminiDiagnosticClient;
 import com.fordlauncher.launcher.obd.ObdRepository;
 import com.fordlauncher.launcher.obd.Pids;
@@ -29,6 +30,9 @@ import java.util.Map;
 public final class AssistantActionEngine {
 
     private static final String TAG = "FordLauncher/AI";
+    /** Respuesta exacta cuando no hay red y la frase no es un comando local. */
+    private static final String MSG_SIN_INTERNET =
+            "No tengo conexión a internet para responder eso, pero puedo abrir aplicaciones, revisar el vehículo o reproducir tu música descargada.";
 
     /** Operaciones dependientes del entorno: Activity (Main) o Service (overlay). */
     public interface Host {
@@ -63,7 +67,20 @@ public final class AssistantActionEngine {
     /** Flujo completo: comandos locales -> estado OBD -> Gemini -> ejecutar acción. */
     public void ask(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) { host.setIdle(); return; }
+        // Los comandos locales SIEMPRE van antes de mirar la red o llamar a Gemini.
         try { if (ejecutarComandoLocal(pregunta)) return; } catch (Throwable ignored) {}
+
+        boolean sinRed = !Net.isNetworkAvailable(ctx);
+        boolean requiereVehiculoOffline = sinRed && VehicleIntent.requiereVehiculo(pregunta);
+        if (sinRed) {
+            if (requiereVehiculoOffline && responderSensoresLocal(pregunta)) return;
+            if (!requiereVehiculoOffline) {
+                Log.i(TAG, "Sin red -> respuesta local, Gemini no invocado: " + MSG_SIN_INTERNET);
+                host.showText(MSG_SIN_INTERNET);
+                host.speak(MSG_SIN_INTERNET, true);
+                return;
+            }
+        }
 
         boolean conectado = false;
         boolean requiereVehiculo = VehicleIntent.requiereVehiculo(pregunta);
@@ -79,6 +96,12 @@ public final class AssistantActionEngine {
 
         if (requiereVehiculo && !conectado) {
             final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
+            host.showText(aviso);
+            host.speak(aviso, true);
+            return;
+        }
+        if (sinRed && requiereVehiculoOffline) {
+            final String aviso = "Sergio, sin conexión solo puedo leer los sensores disponibles del vehículo.";
             host.showText(aviso);
             host.speak(aviso, true);
             return;
@@ -237,15 +260,90 @@ public final class AssistantActionEngine {
     public boolean ejecutarMusicaEnSerMusic(String query, String speech) {
         if (query == null || query.trim().length() == 0) return false;
         final String qFinal = query.trim();
+        final boolean sinRed = !Net.isNetworkAvailable(ctx);
+        final String decir = sinRed ? mensajeMusicaOffline(qFinal)
+                : (speech != null && speech.trim().length() > 0 ? speech.trim() : "Ok.");
+        Log.i(TAG, "PLAY_MUSIC offline=" + sinRed + " decir=\"" + decir + "\"");
         // Cerrar el micrófono antes de reproducir evita que onReadyForSpeech robe el foco de audio.
         host.setConversationActive(false);
         host.stopVoice();
-        try { MusicVoiceController.reproducirEnSerMusic(ctx, qFinal); }
+        try { MusicVoiceController.reproducirEnSerMusic(ctx, qFinal, sinRed); }
         catch (Throwable err) { Log.w("FordLauncher/Music", "No se pudo lanzar SerMusic", err); }
         host.refreshMusicSession();
-        host.speak(speech != null && speech.trim().length() > 0 ? speech.trim() : "Ok.", false);
+        host.speak(decir, false);
         return true;
     }
+
+    /** Mensaje exacto de música sin red: con canción concreta o genérico. */
+    private static String mensajeMusicaOffline(String query) {
+        String n = ContactNames.norm(query);
+        boolean generico = n.length() == 0 || n.equals("musica") || n.equals("mi musica")
+                || n.equals("tu musica") || n.equals("canciones") || n.equals("mis canciones")
+                || n.equals("sermusic") || n.equals("ser music") || n.equals("reproductor")
+                || n.equals("reproductor de musica") || n.equals("descargada") || n.equals("descargadas");
+        return generico ? "Sin conexión a internet, reproduciendo tu música descargada"
+                : "Sin conexión a internet, buscando " + query.trim() + " en tu música descargada";
+    }
+
+    /**
+     * Respuesta de sensores 100 % local (sin Gemini) cuando el conductor pregunta
+     * por el vehículo y no hay internet. Usa los últimos valores del OBD2.
+     */
+    private boolean responderSensoresLocal(String pregunta) {
+        String n = ContactNames.norm(pregunta);
+        if (n == null || n.length() == 0) return false;
+        ObdRepository r = obd();
+        if (r == null || (!r.isConnected() && !r.hasRecentValues(20000))) return false;
+        Map<String, Float> v = r.getValues();
+        if (v == null || v.isEmpty()) return false;
+
+        Float coolant = v.get(Pids.COOLANT);
+        Float voltage = v.get(Pids.VOLTAGE);
+        Float rpm = v.get(Pids.RPM);
+        Float speed = v.get(Pids.SPEED);
+        Float consumo = v.get(Pids.FUEL_RATE);
+        if (consumo == null) consumo = v.get(Pids.CONSUMPTION);
+        String respuesta = null;
+
+        boolean porCodigos = n.contains("codigo") || n.contains("falla") || n.contains("dtc");
+        if (porCodigos) {
+            com.fordlauncher.launcher.obd.Health.EngineReport rep = r.getLastReport();
+            java.util.List<String> codes = rep == null ? null : rep.stored;
+            if (codes == null || codes.isEmpty()) codes = rep == null ? null : rep.pending;
+            respuesta = (codes == null || codes.isEmpty())
+                    ? "Sergio, no hay códigos de falla guardados en el vehículo."
+                    : "Sergio, los códigos de falla son " + codes.toString() + ".";
+        } else if ((n.contains("temperatura") || n.contains("refrigerante") || n.contains("caliente")) && coolant != null) {
+            respuesta = "Sergio, el refrigerante está a " + dec(coolant) + " grados.";
+        } else if ((n.contains("bateria") || n.contains("voltaje") || n.contains("voltios")) && voltage != null) {
+            respuesta = "Sergio, la batería marca " + dec(voltage) + " voltios.";
+        } else if ((n.contains("revolucion") || n.contains("rpm") || n.contains("motor")) && rpm != null) {
+            respuesta = "Sergio, el motor está a " + entero(rpm) + " revoluciones por minuto.";
+        } else if (n.contains("velocidad") && speed != null) {
+            respuesta = "Sergio, la velocidad es de " + entero(speed) + " kilómetros por hora.";
+        } else if ((n.contains("consumo") || n.contains("combustible")) && consumo != null) {
+            respuesta = "Sergio, el consumo es de " + dec(consumo) + " litros por hora.";
+        } else if (n.contains("sensor") || n.contains("vehiculo") || n.contains("auto")
+                || n.contains("carro") || n.contains("fiesta") || n.contains("estado")) {
+            if (coolant == null && voltage == null && rpm == null && speed == null) return false;
+            StringBuilder sb = new StringBuilder("Sergio, sin conexión leo los sensores directamente");
+            if (coolant != null) sb.append(": refrigerante ").append(dec(coolant)).append(" grados,");
+            if (voltage != null) sb.append(" batería ").append(dec(voltage)).append(" voltios,");
+            if (rpm != null) sb.append(" motor ").append(entero(rpm)).append(" revoluciones,");
+            if (speed != null) sb.append(" velocidad ").append(entero(speed)).append(" kilómetros por hora,");
+            if (sb.charAt(sb.length() - 1) == ',') sb.setLength(sb.length() - 1);
+            sb.append('.');
+            respuesta = sb.toString();
+        }
+        if (respuesta == null) return false;
+        Log.i(TAG, "Lectura OBD local sin red: " + respuesta);
+        host.showText(respuesta);
+        host.speak(respuesta, true);
+        return true;
+    }
+
+    private static String dec(float x) { return String.format(Locale.getDefault(), "%.1f", x); }
+    private static String entero(float x) { return String.format(Locale.getDefault(), "%.0f", x); }
 
     /** Comandos que el launcher resuelve sin nube: dock, diagnóstico, música, llamadas. */
     public boolean ejecutarComandoLocal(String raw) {
@@ -315,6 +413,7 @@ public final class AssistantActionEngine {
             String q = raw.trim().substring(v.length()).trim();
             q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis|cancion|canción|tema)\\s+", "").trim();
             q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis)\\s+", "").trim();
+            q = q.replaceFirst("(?i)^(cancion|canción|tema)\\s+", "").trim();
             if (q.length() == 0) return false;
             String qNorm = ContactNames.norm(q);
             if (contienePalabra(qNorm, "radio") || contienePalabra(qNorm, "fm")) {
@@ -323,20 +422,23 @@ public final class AssistantActionEngine {
                 return true;
             }
             final String qFinal = q;
+            final boolean sinRed = !Net.isNetworkAvailable(ctx);
+            Log.i(TAG, "PLAY_MUSIC local offline=" + sinRed + " decir=\""
+                    + (sinRed ? mensajeMusicaOffline(qFinal) : "Ok.") + "\"");
             try {
                 if (AppExecutors.get().network != null) {
                     AppExecutors.get().network.execute(new Runnable() {
                         public void run() {
-                            try { MusicVoiceController.reproducirEnSegundoPlano(ctx, qFinal); }
+                            try { MusicVoiceController.reproducirEnSerMusic(ctx, qFinal, sinRed); }
                             catch (Throwable ignored) {}
                         }
                     });
                 } else {
-                    MusicVoiceController.reproducirEnSegundoPlano(ctx, qFinal);
+                    MusicVoiceController.reproducirEnSerMusic(ctx, qFinal, sinRed);
                 }
             } catch (Throwable ignored) {}
             host.refreshMusicSession();
-            host.speak("Ok.", false);
+            host.speak(sinRed ? mensajeMusicaOffline(qFinal) : "Ok.", false);
             return true;
         }
 
