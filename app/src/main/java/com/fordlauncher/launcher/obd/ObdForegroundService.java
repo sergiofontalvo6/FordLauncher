@@ -116,6 +116,14 @@ public class ObdForegroundService extends Service {
         } catch (Throwable t) {
             Log.w(TAG, "startForeground falló: " + t);
         }
+        // Precalienta el respaldo neuronal SOLO después de startForeground(): en
+        // API 27 cualquier retardo antes de la notificación provoca el ANR
+        // "Context.startForegroundService() did not then call startForeground()".
+        try {
+            com.fordlauncher.launcher.ai.SherpaTtsEngine.get().precalentar(this);
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo precalentar Supertonic 3: " + t);
+        }
         try {
             ObdRepository repo = ObdRepository.getInstance(this);
             repo.iniciarAutoconexion(this);

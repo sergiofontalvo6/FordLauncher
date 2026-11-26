@@ -4097,6 +4097,11 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         String vname = prefs.getString("tts_voice", null);
         row(v, "Voz", "La voz concreta que lee (idioma, tono)", voiceLabel(vname),
             new Runnable() { public void run() { pickTtsVoice(); } });
+        final int sidOffline = com.fordlauncher.launcher.ai.SherpaTtsEngine.speakerPreferido(this);
+        row(v, "Voz sin conexión (Supertonic 3 · Speaker 0–9)",
+            "Respaldo neuronal 100 % offline para alertas y respuestas sin Wi-Fi",
+            "Speaker " + sidOffline + " · tocar para probar",
+            new Runnable() { public void run() { pickSupertonicSpeaker(); } });
         row(v, "Instalar / importar voces", "Descarga voces en español u otros idiomas", "Instalar",
             new Runnable() { public void run() { installTtsVoices(); } });
     }
@@ -4161,6 +4166,29 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
                 showVoicePicker(local, CLOUD_NAMES, CLOUD_LABELS);
             }
         });
+    }
+
+    /** Elige uno de los 10 speakers de Supertonic 3 y reproduce una muestra. */
+    private void pickSupertonicSpeaker() {
+        final int actual = com.fordlauncher.launcher.ai.SherpaTtsEngine.speakerPreferido(this);
+        final String[] labels = new String[10];
+        for (int i = 0; i < labels.length; i++) {
+            labels[i] = "Speaker " + i + (i == actual ? "  (actual)" : "");
+        }
+        new AlertDialog.Builder(Main.this, dlg())
+            .setTitle("Voz sin conexión (Supertonic 3)")
+            .setMessage("Toca un speaker para guardarlo y oír una muestra offline.")
+            .setItems(labels, new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    prefs.edit().putInt(com.fordlauncher.launcher.ai.SherpaTtsEngine.PREF_SID, w).apply();
+                    com.fordlauncher.launcher.ai.TextToSpeechManager tm =
+                        com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(Main.this);
+                    tm.previsualizarSupertonic(w);
+                    showSettings(8);
+                }
+            })
+            .setNegativeButton("Cancelar", null)
+            .show();
     }
 
     private void showVoicePicker(final java.util.List<android.speech.tts.Voice> voices, String[] cloudNames, String[] cloudLabels) {
