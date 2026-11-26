@@ -1,6 +1,6 @@
 {
-  "version": "2.10.14",
-  "notes": "",
-  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.14",
-  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.14/FordLauncher-2.10.14.apk"
+  "version": "2.10.15",
+  "notes": "## FordLauncher 2.10.15 — Botón de voz del volante sin salir de la app\n\n### Corregido\n- **El botón físico de voz del volante (SWC/CANBUS) ya no manda al Home del launcher.** Antes, al pulsarlo, el asistente respondía pero abría `Main` y sacaba al conductor de SerMusic, Maps, etc. Ahora la pulsación se enruta directamente al **servicio flotante global**, que escucha, consulta a la IA y ejecuta las acciones **sobre la app que estés viendo**.\n- Las invocaciones de voz del sistema (`ASSIST`, `VOICE_ASSIST`, `VOICE_COMMAND`, búsqueda por voz) pasan por una **actividad transparente** en su propia tarea: no se ve el Home ni parpadea el launcher.\n- Solo se abre el launcher cuando la acción lo pide de verdad (`HOME`, abrir una pestaña del taller o el cajón de apps).\n\n### Pruebas\n- Nuevo hook de ADB para simular exactamente el botón físico del volante:\n  `adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es voice swc`\n",
+  "url": "https://github.com/sergiofontalvo6/FordLauncher/releases/tag/v2.10.15",
+  "apk": "https://github.com/sergiofontalvo6/FordLauncher/releases/download/v2.10.15/FordLauncher-2.10.15.apk"
 }
