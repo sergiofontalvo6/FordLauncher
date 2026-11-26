@@ -231,7 +231,7 @@ public final class AssistantActionEngine {
         String q = VoiceActionParser.extractMusicQuery(fuente);
         if (q.length() == 0) return false;
         Log.i(TAG, "fallback PLAY_MUSIC query=\"" + q + "\"");
-        return ejecutarMusicaEnSerMusic(q, t.length() > 0 ? t : ("Poniendo " + q + " en SerMusic"));
+        return ejecutarMusicaEnSerMusic(q, t.length() > 0 ? t : ("Sonando " + q + " en SerMusic"));
     }
 
     public boolean ejecutarMusicaEnSerMusic(String query, String speech) {

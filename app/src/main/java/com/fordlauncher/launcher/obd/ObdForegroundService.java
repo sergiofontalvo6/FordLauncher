@@ -100,6 +100,13 @@ public class ObdForegroundService extends Service {
         } catch (Throwable t) {
             Log.w(TAG, "No se pudo registrar el sniffer SWC: " + t);
         }
+        // Monitor de alertas críticas: vive aquí, en el servicio que siempre
+        // corre, sin depender del botón flotante ni de internet.
+        try {
+            SensorAnomalyTriggerManager.get(this, ObdRepository.getInstance(this)).start();
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo iniciar el monitor de alertas: " + t);
+        }
     }
 
     @Override
@@ -123,6 +130,7 @@ public class ObdForegroundService extends Service {
     public void onDestroy() {
         try { unregisterReceiver(voiceReceiver); } catch (Throwable ignored) {}
         try { unregisterReceiver(swcSniffer); } catch (Throwable ignored) {}
+        try { SensorAnomalyTriggerManager.get(this, ObdRepository.getInstance(this)).stop(); } catch (Throwable ignored) {}
         Log.i(TAG, "Servicio OBD destruido; el repositorio sigue vivo en el proceso");
         super.onDestroy();
     }

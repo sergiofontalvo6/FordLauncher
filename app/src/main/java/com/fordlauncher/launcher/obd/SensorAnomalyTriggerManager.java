@@ -1,11 +1,11 @@
 package com.fordlauncher.launcher.obd;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import com.fordlauncher.launcher.ai.AppExecutors;
 import com.fordlauncher.launcher.ai.TextToSpeechManager;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -17,11 +17,14 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Disparadores proactivos de anomalías con umbrales de fábrica del Ford Fiesta 1.6L Ti-VCT
- * (sistema Smart Charge). Avisa por voz: "He notado una anomalía: [detalle]".
+ * Disparadores proactivos de anomalías con umbrales de fábrica del Ford Fiesta
+ * 1.6L Ti-VCT (sistema Smart Charge).
  *
- * Solo corre con el botón flotante de IA activo (pref_enable_floating_ai_button).
- * Si se desactiva, Main llama a {@link #stop()} y el monitor queda detenido por completo.
+ * <p>Vive mientras el proceso está vivo: lo arranca {@link ObdForegroundService}
+ * (servicio en primer plano que ya corre desde el botón flotante), NO depende
+ * del interruptor del botón de IA ni de internet. Cada alerta se entrega por
+ * {@link VehicleAlertManager}: notificación local de alta prioridad, banner
+ * flotante sobre cualquier app y voz 100 % offline.
  */
 public class SensorAnomalyTriggerManager {
 
@@ -32,7 +35,7 @@ public class SensorAnomalyTriggerManager {
     public static final float TEMP_CRITICA_HISTERESIS = 110f;
 
     private static final String TAG = "FordLauncher/Anomalia";
-    private static final String PREF_FAB = "pref_enable_floating_ai_button";
+    private static volatile SensorAnomalyTriggerManager instance;
 
     /** Datos mínimos para evaluar los disparadores (NaN = PID no disponible). */
     public static class Snapshot {
@@ -46,7 +49,6 @@ public class SensorAnomalyTriggerManager {
 
     private final Context ctx;
     private final ObdRepository repo;
-    private final SharedPreferences prefs;
     private final Handler h = new Handler(Looper.getMainLooper());
     private final Map<String, Long> ultimaAlerta = new HashMap<String, Long>();
     private final Set<String> dtcConocidos = new HashSet<String>();
@@ -75,7 +77,6 @@ public class SensorAnomalyTriggerManager {
     private final Runnable tick = new Runnable() {
         public void run() {
             if (!running) return;
-            if (!prefs.getBoolean(PREF_FAB, true)) { stop(); return; }
             try {
                 if (repo == null || !repo.isConnected()) {
                     motorEncendidoDesde = 0;
@@ -95,10 +96,10 @@ public class SensorAnomalyTriggerManager {
     private final Runnable dtcTick = new Runnable() {
         public void run() {
             if (!running) return;
-            if (!prefs.getBoolean(PREF_FAB, true)) { stop(); return; }
             if (repo != null && repo.isConnected() && !repo.isDemo() && !consultandoDtc) {
                 consultandoDtc = true;
-                com.fordlauncher.launcher.ai.AppExecutors.get().network.execute(new Runnable() {
+                // Pool local dedicado a OBD: no espera red ni a Gemini.
+                AppExecutors.get().obd.execute(new Runnable() {
                     public void run() {
                         try {
                             Health.EngineReport r = repo.report();
@@ -121,10 +122,19 @@ public class SensorAnomalyTriggerManager {
         }
     };
 
-    public SensorAnomalyTriggerManager(Context c, ObdRepository repo) {
+    private SensorAnomalyTriggerManager(Context c, ObdRepository repo) {
         this.ctx = c.getApplicationContext();
         this.repo = repo;
-        this.prefs = this.ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+    }
+
+    /** Instancia única del monitor (la arranca el servicio OBD en primer plano). */
+    public static SensorAnomalyTriggerManager get(Context c, ObdRepository repo) {
+        if (instance == null) {
+            synchronized (SensorAnomalyTriggerManager.class) {
+                if (instance == null) instance = new SensorAnomalyTriggerManager(c, repo);
+            }
+        }
+        return instance;
     }
 
     /** Arranca el monitoreo periódico (idempotente). */
@@ -141,16 +151,11 @@ public class SensorAnomalyTriggerManager {
         try { TextToSpeechManager.getInstance(ctx).addListener(ttsListener); } catch (Throwable ignored) {}
         h.post(tick);
         h.postDelayed(dtcTick, DTC_POLL_MS);
-        Log.i(TAG, "Monitor de anomalías activo");
+        Log.i(TAG, "Monitor de anomalías activo (independiente de red y del FAB)");
     }
 
-    /** Detiene el monitoreo por completo (botón flotante desactivado o app destruida). */
+    /** Detiene el monitoreo (solo al destruir el proceso/servicio). */
     public synchronized void stop() {
-        if (!running) {
-            h.removeCallbacks(tick);
-            h.removeCallbacks(dtcTick);
-            return;
-        }
         running = false;
         h.removeCallbacks(tick);
         h.removeCallbacks(dtcTick);
@@ -199,17 +204,29 @@ public class SensorAnomalyTriggerManager {
             if (d.coolantTemp >= TEMP_CRITICA) {
                 if (!criticoAvisado) {
                     criticoAvisado = true;
-                    hablarCritico("Atención: temperatura crítica a " + (int) d.coolantTemp + " grados, apaga el motor.");
+                    alertaCritica("temp_critica",
+                            "Temperatura del motor crítica",
+                            (int) d.coolantTemp + " °C · apaga el motor",
+                            "Atención: temperatura crítica a " + (int) d.coolantTemp
+                                    + " grados, apaga el motor.");
                     Log.w(TAG, "temp_critica: " + d.coolantTemp);
                 }
             } else {
                 if (d.coolantTemp < TEMP_CRITICA_HISTERESIS) criticoAvisado = false;
                 if (d.coolantTemp >= 106f) {
-                    dispararAlerta("temp_alta", "temperatura del motor elevada a " + (int) d.coolantTemp + " grados");
+                    dispararAlerta("temp_alta",
+                            "Temperatura elevada",
+                            "Motor a " + (int) d.coolantTemp + " °C",
+                            "He notado una anomalía: temperatura del motor elevada a "
+                                    + (int) d.coolantTemp + " grados.");
                 }
                 if (d.coolantTemp < 70f && !Float.isNaN(d.speed) && d.speed > 30f
                         && !Float.isNaN(d.runTimeMin) && d.runTimeMin > 10f) {
-                    dispararAlerta("temp_baja", "el motor no alcanza temperatura de trabajo, está en " + (int) d.coolantTemp + " grados");
+                    dispararAlerta("temp_baja",
+                            "Motor frío en marcha",
+                            (int) d.coolantTemp + " °C · no alcanza temperatura de trabajo",
+                            "He notado una anomalía: el motor no alcanza temperatura de trabajo, está en "
+                                    + (int) d.coolantTemp + " grados.");
                 }
             }
         }
@@ -217,14 +234,25 @@ public class SensorAnomalyTriggerManager {
         // B) Sistema eléctrico / Smart Charge.
         if (!Float.isNaN(d.batteryVoltage) && d.batteryVoltage > 0f) {
             if (!Float.isNaN(d.rpm) && d.rpm > 600f && d.batteryVoltage < 12.5f) {
-                dispararAlerta("alt_bajo", "el alternador no está cargando la batería, voltaje en "
-                        + fmt(d.batteryVoltage) + " voltios");
+                dispararAlerta("alt_bajo",
+                        "La batería no está cargando",
+                        fmt(d.batteryVoltage) + " V con el motor encendido",
+                        "He notado una anomalía: el alternador no está cargando la batería, voltaje en "
+                                + fmt(d.batteryVoltage) + " voltios.");
             }
             if (d.batteryVoltage > 15.2f) {
-                dispararAlerta("alt_alto", "sobrevoltaje en el alternador a " + fmt(d.batteryVoltage) + " voltios");
+                dispararAlerta("alt_alto",
+                        "Sobrecarga del alternador",
+                        fmt(d.batteryVoltage) + " V · revisa el sistema de carga",
+                        "He notado una anomalía: sobrevoltaje en el alternador a "
+                                + fmt(d.batteryVoltage) + " voltios.");
             }
             if (!Float.isNaN(d.rpm) && d.rpm == 0f && d.batteryVoltage < 11.8f) {
-                dispararAlerta("bat_baja", "batería baja a " + fmt(d.batteryVoltage) + " voltios");
+                dispararAlerta("bat_baja",
+                        "Batería baja",
+                        fmt(d.batteryVoltage) + " V · carga o cambia la batería",
+                        "He notado una anomalía: batería baja a "
+                                + fmt(d.batteryVoltage) + " voltios.");
             }
         }
 
@@ -232,37 +260,58 @@ public class SensorAnomalyTriggerManager {
         if (d.nuevosDTCs != null && !d.nuevosDTCs.isEmpty()) {
             String nuevo = d.nuevosDTCs.get(0);
             if (nuevo != null && nuevo.trim().length() > 0) {
-                dispararAlerta("dtc_" + nuevo, "código de falla " + nuevo + " registrado en la computadora");
+                dispararAlerta("dtc_" + nuevo,
+                        "Código de falla nuevo",
+                        nuevo.trim() + " · revisa el motor",
+                        "He notado una anomalía: código de falla " + nuevo.trim()
+                                + " registrado en la computadora.");
             }
         }
     }
 
-    /** Avisa con cooldown de 15 minutos por tipo de alerta. */
-    public synchronized void dispararAlerta(String clave, String detalleCorto) {
+    /**
+     * Emergencia: notificación + banner + voz local inmediata, sin cooldown y
+     * cortando cualquier locución en curso.
+     */
+    public synchronized void alertaCritica(String clave, String titulo, String detalle, String voz) {
+        colaAvisos.clear();
+        turno++;
+        hablando = true;
+        try {
+            VehicleAlertManager.get(ctx).alert(clave, titulo, detalle, voz);
+        } catch (Throwable t) {
+            hablando = false;
+            Log.w(TAG, "Alerta crítica: " + t);
+        }
+    }
+
+    /** Puertas/CANBUS: cualquier módulo puede llamar aquí al detectar una puerta abierta. */
+    public void alertaPuerta(String puerta) {
+        String p = (puerta == null || puerta.trim().length() == 0) ? "una puerta" : puerta.trim();
+        alertaCritica("puerta_abierta",
+                "Puerta abierta",
+                p + " abierta",
+                "Atención: " + p + " está abierta.");
+    }
+
+    /** Aviso no crítico: banner/notificación + voz encolada, con cooldown de 15 minutos. */
+    public synchronized void dispararAlerta(String clave, String titulo, String detalleCorto, String voz) {
         long ahora = SystemClock.elapsedRealtime();
         Long prev = ultimaAlerta.get(clave);
         if (prev != null && ahora - prev < COOLDOWN_MS) return;
         ultimaAlerta.put(clave, ahora);
-        hablar("He notado una anomalía: " + detalleCorto + ".");
+        try {
+            VehicleAlertManager.get(ctx).notifyAndShow(clave, titulo, detalleCorto);
+        } catch (Throwable t) {
+            Log.w(TAG, "Aviso: " + t);
+        }
+        hablar(voz);
         Log.w(TAG, clave + ": " + detalleCorto);
     }
 
     private void hablar(String texto) {
         colaAvisos.addLast(texto);
         bombear();
-    }
-
-    /** Emergencia: interrumpe lo que se esté diciendo y avisa de inmediato. */
-    private synchronized void hablarCritico(String texto) {
-        colaAvisos.clear();
-        turno++;
-        hablando = true;
-        try {
-            TextToSpeechManager.getInstance(ctx).hablarTextoLargo(texto);
-        } catch (Throwable t) {
-            hablando = false;
-            Log.w(TAG, "TTS: " + t);
-        }
     }
 
     /** Reproduce el siguiente aviso cuando la voz está libre, para no cortar mensajes. */
@@ -276,7 +325,7 @@ public class SensorAnomalyTriggerManager {
         hablando = true;
         final int miTurno = ++turno;
         try {
-            m.hablarTextoLargo(texto);
+            m.hablarAlertaCritica(texto);
         } catch (Throwable t) {
             hablando = false;
             Log.w(TAG, "TTS: " + t);
@@ -293,6 +342,38 @@ public class SensorAnomalyTriggerManager {
                 bombear();
             }
         }, 20000L);
+    }
+
+    /**
+     * Hook de pruebas ADB:
+     * {@code --es alert test_temp|test_battery|test_dtc|test_door}.
+     * Dispara la misma ruta que una alerta real, sin necesitar el adaptador.
+     */
+    public void simular(String tipo) {
+        String t = tipo == null ? "" : tipo.trim().toLowerCase(Locale.ROOT);
+        if (t.contains("temp")) {
+            alertaCritica("test_temp",
+                    "Temperatura del motor crítica",
+                    "113 °C · apaga el motor",
+                    "Atención: temperatura crítica a 113 grados, apaga el motor.");
+        } else if (t.contains("battery") || t.contains("bateria") || t.contains("volt")) {
+            alertaCritica("test_battery",
+                    "Batería baja",
+                    "11.2 V · carga o cambia la batería",
+                    "Atención: batería baja a 11.2 voltios, carga o cambia la batería.");
+        } else if (t.contains("dtc") || t.contains("falla")) {
+            alertaCritica("test_dtc",
+                    "Código de falla nuevo",
+                    "P0301 · fallo de encendido en el cilindro 1",
+                    "Atención: código de falla P cero tres cero uno, fallo de encendido en el cilindro uno.");
+        } else if (t.contains("door") || t.contains("puerta")) {
+            alertaPuerta("la puerta del conductor");
+        } else {
+            alertaCritica("test_alerta",
+                    "Alerta de prueba",
+                    "Simulación del sistema de avisos",
+                    "Esta es una alerta de prueba del sistema de avisos del vehículo.");
+        }
     }
 
     /** Compara los DTC activos con los ya vistos; la primera lectura solo sirve de línea base. */

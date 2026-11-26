@@ -154,7 +154,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     private long lastFix;
     private boolean installing;
     private ParkedModeManager parked;
-    private com.fordlauncher.launcher.obd.SensorAnomalyTriggerManager anomalies;
     private volatile float parkGpsKmh;
     float parkedScale() { return s; }
     float lastGpsKmh() { return parkGpsKmh; }
@@ -788,7 +787,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { if (workshop != null) workshop.onDestroy(); } catch (Throwable ignored) {}
         workshop = null;
         try { if (parked != null) parked.onDestroy(); } catch (Throwable ignored) { }
-        try { if (anomalies != null) anomalies.stop(); } catch (Throwable ignored) {}
         modoConversacionActivo = false;
         h.removeCallbacks(fabReescuchar);
         try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
@@ -1418,15 +1416,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
                 fabAi.setLayoutParams(lp);
             }
         }
-        // Disparadores proactivos de anomalías: solo con el botón flotante de IA activo.
-        try {
-            if (en) {
-                if (anomalies == null) anomalies = new com.fordlauncher.launcher.obd.SensorAnomalyTriggerManager(this, getObdRepo());
-                anomalies.start();
-            } else if (anomalies != null) {
-                anomalies.stop();
-            }
-        } catch (Throwable ignored) {}
     }
 
     private void onFabTap() {

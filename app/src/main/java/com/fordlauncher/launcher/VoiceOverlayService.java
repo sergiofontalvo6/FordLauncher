@@ -7,7 +7,10 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -17,9 +20,12 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import com.fordlauncher.launcher.ai.AssistantActionEngine;
 
@@ -49,16 +55,26 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
     /** Pregunta ya dictada (p. ej. búsqueda de música del sistema). */
     public static final String ACTION_ASK = "com.fordlauncher.launcher.action.ASK";
     public static final String EXTRA_QUERY = "com.fordlauncher.launcher.extra.QUERY";
+    /** Alerta crítica del vehículo: banner flotante sobre cualquier app. */
+    public static final String ACTION_SHOW_ALERT = "com.fordlauncher.launcher.action.SHOW_ALERT";
+    public static final String EXTRA_ALERT_TITLE = "com.fordlauncher.launcher.extra.ALERT_TITLE";
+    public static final String EXTRA_ALERT_DETAIL = "com.fordlauncher.launcher.extra.ALERT_DETAIL";
+    public static final String EXTRA_ALERT_KEY = "com.fordlauncher.launcher.extra.ALERT_KEY";
+    private static final long ALERT_TIMEOUT_MS = 15000L;
     private static volatile boolean running;
     private static volatile VoiceOverlayService instance;
 
     private WindowManager wm;
     private WindowManager.LayoutParams params;
     private View bubble;
+    private View alertBanner;
     private com.fordlauncher.launcher.ai.AiFabAnimator anim;
     private com.fordlauncher.launcher.obd.VoiceInputManager voice;
     private AssistantActionEngine assistant;
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable alertTimeout = new Runnable() {
+        public void run() { removeAlertBanner(); }
+    };
     private float touchX, touchY;
     private float startX, startY;
     private boolean dragging;
@@ -98,6 +114,20 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         send(context, new Intent(context, VoiceOverlayService.class)
                 .setAction(ACTION_ASK)
                 .putExtra(EXTRA_QUERY, query.trim()));
+    }
+
+    /**
+     * Muestra el banner de alerta crítica sobre la app que esté al frente.
+     * Arranca el servicio si aún no estaba vivo (la notificación de sistema la
+     * publica {@code VehicleAlertManager}).
+     */
+    public static void showAlert(Context context, String title, String detail, String key) {
+        if (context == null) return;
+        send(context, new Intent(context, VoiceOverlayService.class)
+                .setAction(ACTION_SHOW_ALERT)
+                .putExtra(EXTRA_ALERT_TITLE, title == null ? "" : title)
+                .putExtra(EXTRA_ALERT_DETAIL, detail == null ? "" : detail)
+                .putExtra(EXTRA_ALERT_KEY, key == null ? "" : key));
     }
 
     private static void send(Context context, Intent i) {
@@ -145,6 +175,12 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
             String q = intent.getStringExtra(EXTRA_QUERY);
             Log.i(TAG, "ASK desde intent del sistema: " + q);
             consultar(q);
+        } else if (ACTION_SHOW_ALERT.equals(action)) {
+            String title = intent.getStringExtra(EXTRA_ALERT_TITLE);
+            String detail = intent.getStringExtra(EXTRA_ALERT_DETAIL);
+            String key = intent.getStringExtra(EXTRA_ALERT_KEY);
+            Log.i(TAG, "SHOW_ALERT " + key + ": " + title + " · " + detail);
+            showAlertBanner(title, detail);
         }
         return START_STICKY;
     }
@@ -157,6 +193,7 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         running = false;
         instance = null;
         if (voice != null) { try { voice.cancel(); } catch (Throwable ignored) {} }
+        removeAlertBanner();
         removeBubble();
         super.onDestroy();
     }
@@ -254,6 +291,140 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
             bubble = null;
         }
         if (anim != null) { try { anim.stop(); } catch (Throwable ignored) {} anim = null; }
+    }
+
+    /**
+     * Banner de alerta crítica sobre la app en primer plano (SerMusic, Waze,
+     * Maps...). No roba el foco ni cambia de actividad; se cierra solo a los
+     * 15 s o con los botones Silenciar / Cerrar.
+     */
+    private void showAlertBanner(String titulo, String detalle) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Alerta sin permiso de overlay: queda solo la notificación");
+            return;
+        }
+        if (wm == null) wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        if (wm == null) return;
+        removeAlertBanner();
+
+        final float d = getResources().getDisplayMetrics().density;
+        int pad = (int) (14 * d);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(pad, pad, pad, pad);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xF2181A1F);
+        bg.setCornerRadius(16 * d);
+        bg.setStroke(Math.max(1, (int) (2 * d)), 0xFFFF5252);
+        card.setBackground(bg);
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_alert_warning);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int iconSize = (int) (42 * d);
+        card.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams textsLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        textsLp.leftMargin = (int) (12 * d);
+        textsLp.rightMargin = (int) (10 * d);
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText(titulo == null || titulo.trim().length() == 0
+                ? "Alerta del vehículo" : titulo);
+        tvTitle.setTextColor(Color.WHITE);
+        tvTitle.setTextSize(18f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setMaxLines(1);
+        texts.addView(tvTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView tvDetail = new TextView(this);
+        tvDetail.setText(detalle == null ? "" : detalle);
+        tvDetail.setTextColor(0xFFFFCDD2);
+        tvDetail.setTextSize(15f);
+        tvDetail.setMaxLines(3);
+        LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        detailLp.topMargin = (int) (3 * d);
+        texts.addView(tvDetail, detailLp);
+        card.addView(texts, textsLp);
+
+        TextView silence = bannerButton("Silenciar");
+        silence.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                try {
+                    com.fordlauncher.launcher.ai.TextToSpeechManager
+                            .getInstance(VoiceOverlayService.this).detener();
+                } catch (Throwable ignored) {}
+                removeAlertBanner();
+            }
+        });
+        card.addView(silence, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView close = bannerButton("Cerrar");
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        closeLp.leftMargin = (int) (8 * d);
+        close.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { removeAlertBanner(); }
+        });
+        card.addView(close, closeLp);
+
+        int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        lp.y = (int) (30 * d);
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        lp.width = Math.min(screenW - (int) (32 * d), (int) (860 * d));
+        lp.windowAnimations = android.R.style.Animation_Toast;
+        try {
+            wm.addView(card, lp);
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo añadir el banner de alerta", t);
+            return;
+        }
+        alertBanner = card;
+        main.removeCallbacks(alertTimeout);
+        main.postDelayed(alertTimeout, ALERT_TIMEOUT_MS);
+    }
+
+    private TextView bannerButton(String texto) {
+        float d = getResources().getDisplayMetrics().density;
+        TextView b = new TextView(this);
+        b.setText(texto);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(14f);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding((int) (12 * d), (int) (8 * d), (int) (12 * d), (int) (8 * d));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0x33FFFFFF);
+        bg.setCornerRadius(10 * d);
+        b.setBackground(bg);
+        return b;
+    }
+
+    private void removeAlertBanner() {
+        main.removeCallbacks(alertTimeout);
+        if (alertBanner != null && wm != null) {
+            try { wm.removeView(alertBanner); } catch (Throwable ignored) {}
+        }
+        alertBanner = null;
     }
 
     private void onBubbleTap() {

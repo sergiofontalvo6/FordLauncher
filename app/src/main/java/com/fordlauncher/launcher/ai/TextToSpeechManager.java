@@ -62,6 +62,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private volatile boolean initializing;
     private volatile boolean speaking;
     private volatile Runnable pendingDone;
+    /** La siguiente locución pendiente debe ser 100 % local (alerta crítica). */
+    private volatile boolean pendingOffline;
     /** Un solo reintento de la voz de nube antes de caer al motor local. */
     private boolean reintentoNubeHecho;
 
@@ -214,8 +216,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             configurarListener();
             isInitialized = true;
             Log.i(TAG, "Motor listo: " + tts.getDefaultEngine());
+            boolean offline = pendingOffline;
+            pendingOffline = false;
             while (!pendingQueue.isEmpty()) {
-                hablarTextoLargo(pendingQueue.poll());
+                hablarTextoLargoInterno(pendingQueue.poll(), offline);
             }
         } else {
             Log.e(TAG, "Fallo al inicializar TTS. Código: " + status);
@@ -246,8 +250,16 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             try {
                 Set<Voice> voces = tts.getVoices();
                 if (voces != null && !voces.isEmpty()) {
+                    for (Voice v : voces) {
+                        try {
+                            Log.i(TAG, "Voz disponible: " + v.getName()
+                                    + " locale=" + v.getLocale()
+                                    + " requiereRed=" + v.isNetworkConnectionRequired());
+                        } catch (Throwable ignored) {}
+                    }
                     if (preferida != null) {
                         for (Voice v : voces) {
+                            if (!esVozLocal(v)) continue;
                             if (v.getName().equalsIgnoreCase(preferida)) {
                                 tts.setVoice(v);
                                 asignada = true;
@@ -258,6 +270,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                     }
                     if (!asignada) {
                         for (Voice v : voces) {
+                            if (!esVozLocal(v)) continue;
                             Locale loc = v.getLocale();
                             if (loc == null || !"es".equals(loc.getLanguage())) continue;
                             String n = v.getName().toLowerCase(Locale.ROOT);
@@ -265,7 +278,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                                     || n.contains("-b-") || n.contains("-d-")) {
                                 tts.setVoice(v);
                                 asignada = true;
-                                Log.i(TAG, "Voz masculina en español: " + v.getName());
+                                Log.i(TAG, "Voz masculina en español (local): " + v.getName());
                                 break;
                             }
                         }
@@ -283,6 +296,12 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         }
         tts.setPitch(PITCH_LOCAL);
         tts.setSpeechRate(RATE_LOCAL);
+    }
+
+    /** Una voz es utilizable sin internet solo si no exige conexión de red. */
+    private static boolean esVozLocal(Voice v) {
+        if (v == null) return false;
+        try { return !v.isNetworkConnectionRequired(); } catch (Throwable t) { return false; }
     }
 
     private void configurarListener() {
@@ -306,21 +325,39 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     public synchronized void hablarTextoLargo(String textoCompleto) {
         pendingDone = null;
-        hablarTextoLargoInterno(textoCompleto);
+        hablarTextoLargoInterno(textoCompleto, false);
     }
 
     public synchronized void hablarTextoLargo(String textoCompleto, Runnable onDone) {
         pendingDone = onDone;
-        hablarTextoLargoInterno(textoCompleto);
+        hablarTextoLargoInterno(textoCompleto, false);
     }
 
-    private void hablarTextoLargoInterno(String textoCompleto) {
+    /**
+     * Alerta crítica del vehículo: SIEMPRE se sintetiza con el motor local, sin
+     * nube ni Wi-Fi, y con prioridad sobre cualquier locución en curso. Es la
+     * ruta que usan temperatura, batería, DTC y puertas/CANBUS.
+     */
+    public synchronized void hablarAlertaCritica(String textoCompleto) {
+        pendingDone = null;
+        // Corta lo que esté diciendo (Gemini, música, avisos anteriores) para
+        // que la advertencia se escuche de inmediato.
+        try { if (tts != null) tts.stop(); } catch (Throwable ignored) {}
+        if (edge != null) { try { edge.stop(); } catch (Throwable ignored) {} }
+        hablarTextoLargoInterno(textoCompleto, true);
+    }
+
+    private void hablarTextoLargoInterno(String textoCompleto, boolean offline) {
         if (textoCompleto == null || textoCompleto.trim().isEmpty()) return;
         String limpio = limpiar(textoCompleto);
         if (limpio.isEmpty()) return;
-        String nube = vozNubePreferida();
-        if (nube != null && hablarNube(nube, limpio)) return;
-        hablarLocal(limpio);
+        // offline=true: nunca se intenta Edge/nube, aunque la voz configurada
+        // sea "Nube · ...". La alerta debe sonar sin internet.
+        if (!offline) {
+            String nube = vozNubePreferida();
+            if (nube != null && hablarNube(nube, limpio)) return;
+        }
+        hablarLocal(limpio, offline);
     }
 
     private boolean hablarNube(String nombreVoz, String texto) {
@@ -337,10 +374,13 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         }
     }
 
-    private void hablarLocal(String limpio) {
+    private void hablarLocal(String limpio) { hablarLocal(limpio, false); }
+
+    private void hablarLocal(String limpio, boolean offline) {
         if (!isInitialized) {
             pendingQueue.clear();
             pendingQueue.add(limpio);
+            pendingOffline = offline;
             setSpeaking(true);
             inicializarMotor();
             return;
@@ -363,6 +403,9 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             Bundle params = new Bundle();
             params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, uId);
             params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
+            // Android 8.1: impide que el motor intente sintetizar en la nube
+            // cuando no hay Wi-Fi (fallaría en silencio).
+            params.putString(TextToSpeech.Engine.KEY_FEATURE_NETWORK_SYNTHESIS, "false");
 
             int modo = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
             int res = tts.speak(fragmentos.get(i), modo, params, uId);

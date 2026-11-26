@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
  * Gestor central de hilos para evitar la proliferación de pools (pool-1..pool-8).
  * - diskIO: 1 hilo para I/O local (SQLite, SharedPreferences, contactos).
  * - network: 2 hilos para red (Gemini, Edge TTS, HTTP).
+ * - obd: 1 hilo local para lecturas ELM327/DTC (nunca espera red).
  * - scheduler: ScheduledExecutorService para telemetría OBD y tareas periódicas.
  */
 public final class AppExecutors {
@@ -17,11 +18,13 @@ public final class AppExecutors {
 
     public final Executor diskIO;
     public final Executor network;
+    public final Executor obd;
     public final ScheduledExecutorService scheduler;
 
     private AppExecutors() {
         diskIO = Executors.newSingleThreadExecutor();
         network = Executors.newFixedThreadPool(2);
+        obd = Executors.newSingleThreadExecutor();
         scheduler = Executors.newScheduledThreadPool(1);
     }
 

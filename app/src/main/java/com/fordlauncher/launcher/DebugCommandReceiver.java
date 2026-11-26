@@ -14,6 +14,7 @@ import android.content.pm.ApplicationInfo;
  * adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es cmd "abre diagnóstico"
  * adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD \
  *     --es json '{"action":"OPEN_DIAGNOSTIC","query":"sensores","speech":"..."}'
+ * adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es alert test_temp
  * </pre>
  */
 public class DebugCommandReceiver extends BroadcastReceiver {
@@ -32,6 +33,21 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         String overlayQuery = intent.getStringExtra("overlay_query");
         String overlayResp = intent.getStringExtra("overlay_resp");
         String overlayResp64 = intent.getStringExtra("overlay_resp64");
+        // Hook de pruebas: simula una alerta crítica real (notificación + banner
+        // flotante + TTS offline) sin adaptador OBD ni conexión a internet.
+        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es alert test_temp
+        String alert = intent.getStringExtra("alert");
+        if (alert != null) {
+            android.util.Log.i("FordLauncher/VoiceCmd", "debug: alerta simulada " + alert);
+            try {
+                com.fordlauncher.launcher.obd.SensorAnomalyTriggerManager
+                        .get(context, com.fordlauncher.launcher.obd.ObdRepository.getInstance(context))
+                        .simular(alert);
+            } catch (Throwable t) {
+                android.util.Log.e("FordLauncher/VoiceCmd", "debug: alerta falló", t);
+            }
+            return;
+        }
         // Hook de pruebas: dispara EXACTAMENTE el mismo handler que el botón
         // físico de voz del volante (broadcast SWC/HCN -> VoiceTrigger).
         //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es voice swc
