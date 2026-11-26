@@ -903,9 +903,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
 
     /** Dispara inmediatamente el modo conversación en vivo del asistente de voz. */
     public void iniciarConversacionEnVivo() {
-        try { activarVozSwc(); } catch (Throwable t) {
-            android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo iniciar conversación en vivo: " + t);
-        }
+        VoiceTrigger.fire(this, "iniciarConversacionEnVivo");
     }
 
     /** Receptor global de voz del SWC/HCN mientras el launcher está activo. */
@@ -919,37 +917,34 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
 
     /**
      * Dispara el modo conversación en vivo, equivalente a tocar el FAB de IA.
-     * Se usa tanto para las teclas del volante como para broadcasts de HCN.
+     * Ya NO trae el launcher al frente: el botón físico del volante se enruta
+     * siempre al {@link VoiceOverlayService} mediante {@link VoiceTrigger}.
      */
     void activarVozSwc() {
-        // Una prensa larga puede emitir varios eventos; si ya hay conversación
-        // activa no se apaga por rebotes (para detenerla está el FAB).
-        if (modoConversacionActivo || fabEscuchando) {
-            android.util.Log.i("FordLauncher/VoiceCmd", "Voz SWC ignorada: conversación ya activa");
-            return;
-        }
-        if (hasWindowFocus()) {
-            try { onFabTap(); } catch (Throwable t) {
-                android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo activar la voz: " + t);
-            }
-            return;
-        }
-        // Launcher en pausa o sin foco: se trae al frente y se atiende en onResume.
-        pendingVoiceOnResume = true;
+        VoiceTrigger.fire(this, "activarVozSwc");
+    }
+
+    /**
+     * Respaldo del disparo de voz: usa el botón local SOLO si el launcher ya
+     * está visible con foco. Nunca lanza {@code Main} ni emite CATEGORY_HOME.
+     *
+     * @return true si la voz quedó activa (o ya lo estaba).
+     */
+    boolean activarVozSwcSiVisible() {
+        if (modoConversacionActivo || fabEscuchando) return true;
+        if (!hasWindowFocus()) return false;
         try {
-            startActivity(new Intent(this, Main.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            onFabTap();
+            return true;
         } catch (Throwable t) {
-            android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo traer el launcher al frente: " + t);
+            android.util.Log.w("FordLauncher/VoiceCmd", "No se pudo activar la voz local: " + t);
+            return false;
         }
-        // Respaldo por si ya estaba al frente y onResume no se repite.
-        h.postDelayed(new Runnable() { public void run() {
-            if (!pendingVoiceOnResume) return;
-            if (hasWindowFocus() && !modoConversacionActivo) {
-                pendingVoiceOnResume = false;
-                try { onFabTap(); } catch (Throwable ignored) {}
-            }
-        }}, 700);
+    }
+
+    /** El servicio flotante avisa cuando pasa a estar activo para ocultar el FAB local. */
+    public void syncFloatingAi() {
+        try { refreshFloatingAi(); } catch (Throwable ignored) {}
     }
 
     /** Atiende una petición de voz que llegó con la actividad en pausa. */

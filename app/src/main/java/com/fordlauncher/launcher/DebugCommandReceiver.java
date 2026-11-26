@@ -32,6 +32,16 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         String overlayQuery = intent.getStringExtra("overlay_query");
         String overlayResp = intent.getStringExtra("overlay_resp");
         String overlayResp64 = intent.getStringExtra("overlay_resp64");
+        // Hook de pruebas: dispara EXACTAMENTE el mismo handler que el botón
+        // físico de voz del volante (broadcast SWC/HCN -> VoiceTrigger).
+        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es voice swc
+        String voice = intent.getStringExtra("voice");
+        if (voice != null) {
+            android.util.Log.i("FordLauncher/VoiceCmd",
+                    "debug: simulando botón físico de voz (" + voice + ")");
+            com.fordlauncher.launcher.VoiceTrigger.fire(context, "adb debug " + voice);
+            return;
+        }
         if (overlayResp64 != null) {
             try { overlayResp = new String(android.util.Base64.decode(overlayResp64, android.util.Base64.NO_WRAP), "UTF-8"); }
             catch (Throwable ignored) {}

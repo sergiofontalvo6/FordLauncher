@@ -42,6 +42,17 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+        </activity>
+        <!--
+            Voz del sistema/volante: actividad transparente en su PROPIA tarea.
+            Reenvía la orden al servicio flotante y se cierra sin abrir el Home.
+            La afinidad de tarea distinta evita que se traiga al frente la tarea
+            del launcher (que mostraría Main al terminar).
+        -->
+        <activity android:name="com.fordlauncher.launcher.VoiceAssistActivity"
+            android:exported="true" android:excludeFromRecents="true" android:noHistory="true"
+            android:launchMode="singleTop" android:taskAffinity="com.fordlauncher.launcher.voiceassist"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.ASSIST"/>
                 <action android:name="android.intent.action.VOICE_ASSIST"/>

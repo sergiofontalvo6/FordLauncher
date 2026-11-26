@@ -1,7 +1,6 @@
 package com.fordlauncher.launcher;
 
 import android.content.Context;
-import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.SystemClock;
 import android.util.Log;
@@ -74,8 +73,17 @@ public final class VoiceTrigger {
     }
 
     /**
-     * Dispara la conversación en vivo. Si {@link Main} ya existe se reutiliza
-     * (aunque esté en pausa); si no, se abre con {@link #EXTRA_VOICE}.
+     * Dispara la conversación en vivo desde el volante.
+     *
+     * <p><b>Regla de oro:</b> el botón físico nunca debe abrir {@link Main} ni
+     * emitir {@code CATEGORY_HOME}. La orden va siempre al
+     * {@link VoiceOverlayService}, que escucha, consulta a la IA y ejecuta las
+     * acciones en segundo plano sobre la app que el conductor esté viendo. Solo
+     * cuando una acción concreta lo pida (HOME, pestañas del launcher) el motor
+     * traerá {@code Main} al frente.
+     *
+     * <p>Respaldo: si el permiso de superposición no está concedido y {@code Main}
+     * ya está visible con foco, se usa su botón local (tampoco se lanza Main).
      */
     public static void fire(Context ctx, String source) {
         long now = SystemClock.elapsedRealtime();
@@ -85,19 +93,27 @@ public final class VoiceTrigger {
         }
         Log.i(TAG, "Disparo de voz SWC (" + source + ")");
 
+        Context app = ctx != null ? ctx.getApplicationContext() : null;
+        if (app == null) {
+            Main m = Main.instance();
+            if (m != null) app = m.getApplicationContext();
+        }
+
+        // 1) Ruta normal: servicio flotante global (no abre ninguna actividad).
+        if (app != null) {
+            try {
+                VoiceOverlayService.toggleListen(app);
+                Log.i(TAG, "Voz enviada a VoiceOverlayService (Main no se abre)");
+                return;
+            } catch (Throwable t) {
+                Log.w(TAG, "No se pudo usar el servicio flotante: " + t);
+            }
+        }
+
+        // 2) Sin servicio: usar el FAB local SOLO si el launcher ya está al frente.
         Main m = Main.instance();
-        if (m != null) {
-            m.activarVozSwc();
-            return;
-        }
-        if (ctx == null) return;
-        try {
-            Intent i = new Intent(ctx, Main.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    .putExtra(EXTRA_VOICE, true);
-            ctx.startActivity(i);
-        } catch (Throwable t) {
-            Log.w(TAG, "No se pudo abrir el launcher para la voz: " + t);
-        }
+        if (m != null && m.activarVozSwcSiVisible()) return;
+
+        Log.w(TAG, "Voz SWC sin destino: activa «Mostrar sobre otras apps» para el copiloto");
     }
 }

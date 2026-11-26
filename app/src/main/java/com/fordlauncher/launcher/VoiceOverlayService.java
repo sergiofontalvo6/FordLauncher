@@ -39,6 +39,16 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
     private static final String CHANNEL = "voice_overlay";
     private static final int NOTIF_ID = 9711;
     private static final String PREFS = "voice_overlay";
+
+    /**
+     * Acción del botón físico de voz del volante (SWC/CANBUS): inicia o detiene
+     * la escucha exactamente igual que un toque en la burbuja flotante, sin
+     * traer {@link Main} al frente ni salir de la app que esté abierta.
+     */
+    public static final String ACTION_TOGGLE_LISTEN = "com.fordlauncher.launcher.action.TOGGLE_LISTEN";
+    /** Pregunta ya dictada (p. ej. búsqueda de música del sistema). */
+    public static final String ACTION_ASK = "com.fordlauncher.launcher.action.ASK";
+    public static final String EXTRA_QUERY = "com.fordlauncher.launcher.extra.QUERY";
     private static volatile boolean running;
     private static volatile VoiceOverlayService instance;
 
@@ -73,14 +83,47 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         try { context.stopService(new Intent(context, VoiceOverlayService.class)); } catch (Throwable ignored) {}
     }
 
+    /**
+     * Dispara la escucha desde el botón físico del carro. No abre ninguna
+     * actividad: el servicio ya vive en primer plano y dibuja su burbuja sobre
+     * la app que el conductor esté viendo (SerMusic, Maps, etc.).
+     */
+    public static void toggleListen(Context context) {
+        send(context, new Intent(context, VoiceOverlayService.class).setAction(ACTION_TOGGLE_LISTEN));
+    }
+
+    /** Envía una pregunta ya transcrita (búsquedas de voz del sistema). */
+    public static void ask(Context context, String query) {
+        if (query == null || query.trim().length() == 0) return;
+        send(context, new Intent(context, VoiceOverlayService.class)
+                .setAction(ACTION_ASK)
+                .putExtra(EXTRA_QUERY, query.trim()));
+    }
+
+    private static void send(Context context, Intent i) {
+        if (context == null || i == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(i);
+            else context.startService(i);
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo enviar " + i.getAction(), t);
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
         running = true;
+        // startForeground() lo antes posible: en el AC8227L el arranque en frío
+        // es lento y Android mata el proceso si tarda más de 5 s.
+        crearNotificacion();
+        try {
+            final Main m = Main.instance();
+            if (m != null) main.post(new Runnable() { public void run() { m.syncFloatingAi(); } });
+        } catch (Throwable ignored) {}
         assistant = new AssistantActionEngine(this);
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-        crearNotificacion();
         voice = new com.fordlauncher.launcher.obd.VoiceInputManager(this);
         voice.setOnBeginningOfSpeech(new Runnable() { public void run() { main.post(new Runnable() { public void run() { if (anim != null) anim.listening(); } }); } });
         voice.setOnSilence(new Runnable() { public void run() { main.post(new Runnable() { public void run() { if (anim != null) anim.idle(); } }); } });
@@ -93,6 +136,16 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
             if (bubble == null) addBubble();
         } else removeBubble();
+        String action = intent != null ? intent.getAction() : null;
+        if (ACTION_TOGGLE_LISTEN.equals(action)) {
+            // Mismo flujo que el toque en la burbuja: escuchar/detener sin abrir Main.
+            Log.i(TAG, "TOGGLE_LISTEN desde botón físico del volante");
+            onBubbleTap();
+        } else if (ACTION_ASK.equals(action)) {
+            String q = intent.getStringExtra(EXTRA_QUERY);
+            Log.i(TAG, "ASK desde intent del sistema: " + q);
+            consultar(q);
+        }
         return START_STICKY;
     }
 
@@ -204,10 +257,23 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
     }
 
     private void onBubbleTap() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notifyUser("Activa el permiso de micrófono para hablarle a la IA");
+            return;
+        }
         if (voice != null && voice.isListening()) {
             voice.stopListening();
             if (anim != null) anim.idle();
             return;
+        }
+        // Si estaba hablando/esperando, el nuevo toque corta la respuesta y
+        // vuelve a escuchar (igual que el FAB del launcher).
+        if (anim != null && (anim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.SPEAKING
+                || anim.state() == com.fordlauncher.launcher.ai.AiFabAnimator.WAITING)) {
+            try { com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(this).detener(); }
+            catch (Throwable ignored) {}
         }
         if (anim != null) anim.listening();
         voice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
@@ -234,7 +300,11 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
 
     /** Mismo prompt, mismo snapshot y mismo motor que Main.fabAskAi(). */
     private void consultar(final String pregunta) {
-        assistant.ask(pregunta);
+        if (pregunta == null || pregunta.trim().length() == 0) {
+            if (anim != null) anim.idle();
+            return;
+        }
+        assistant.ask(pregunta.trim());
     }
 
     private void hablar(String texto) {
