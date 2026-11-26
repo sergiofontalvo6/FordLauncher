@@ -42,6 +42,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private static final String KEY_VOICE = "tts_voice";
     /** Voz local efectiva (misma timbre online y offline cuando no hay voz de nube elegida). */
     private static final String KEY_VOICE_LOCAL = "tts_voice_local";
+    /** Migración única de las antiguas voces de nube masculinas a la femenina local. */
+    private static final String KEY_VOICE_MIGRATED = "tts_voice_female_migrated";
     private static final String EDGE_PREFIX = "edge:";
     private static final String LAST_CHUNK = "last_chunk_";
     private static final long INIT_TIMEOUT_MS = 12000L;
@@ -84,6 +86,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         this.context = context.getApplicationContext();
         this.prefs = this.context.getSharedPreferences(PREFS, 0);
         this.audioManager = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
+        migrarVozMasculinaNube();
         inicializarMotor();
     }
 
@@ -239,6 +242,25 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             Log.e(TAG, "Fallo al inicializar TTS. Código: " + status);
             fallo("No se pudo iniciar la voz (código " + status + ").");
         }
+    }
+
+    /** Migra una vez las voces de nube masculinas a la femenina local persistida. */
+    private void migrarVozMasculinaNube() {
+        try {
+            if (prefs.getBoolean(KEY_VOICE_MIGRATED, false)) return;
+            String v = prefs.getString(KEY_VOICE, null);
+            if (v != null && v.startsWith(EDGE_PREFIX)) {
+                String n = v.substring(EDGE_PREFIX.length());
+                if (n.contains("Gonzalo") || n.contains("Jorge") || n.contains("Tomas") || n.contains("Alvaro")) {
+                    String local = vozLocalEfectiva();
+                    if (local != null && local.length() > 0) prefs.edit().putString(KEY_VOICE, local).apply();
+                    else prefs.edit().remove(KEY_VOICE).apply();
+                    Log.i(TAG, "Voz de nube masculina migrada a femenina local: "
+                            + (local == null ? "automática" : local));
+                }
+            }
+            prefs.edit().putBoolean(KEY_VOICE_MIGRATED, true).apply();
+        } catch (Throwable ignored) {}
     }
 
     /** Voz local elegida en Ajustes (null si es nube o automática). */
