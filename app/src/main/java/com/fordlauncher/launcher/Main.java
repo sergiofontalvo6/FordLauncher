@@ -46,6 +46,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.fordlauncher.launcher.nav.NavState;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -141,6 +143,17 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     private float odoLastSavedKm = -1f;
     private Location lastGpsLoc;
     private NavigationCardHost navCard;
+    // HOME con ruta: guía estrecha al centro, PiP arriba a la derecha y audio compacto debajo.
+    private FrameLayout navCardView, audioCardView, telemetryBarView;
+    private View pipZone;
+    private View audioPrev, audioPlay, audioNext;
+    private final NavState.Listener homeNavListener = new NavState.Listener() {
+        public void onNavState(NavState.Data data) {
+            h.post(new Runnable() { public void run() {
+                if (navCardView != null) applyHomeNavLayout(NavState.isActive());
+            }});
+        }
+    };
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
     private boolean askedMediaPerm;
@@ -802,6 +815,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
         try { unregisterReceiver(wakeReceiver); } catch (Throwable ignored) {}
         try { stopIlluminationPolling(); } catch (Throwable ignored) {}
+        NavState.removeListener(homeNavListener);
         try { if (navCard != null) navCard.release(); } catch (Throwable ignored) {}
         navCard = null;
         NAV_CARD = null;
@@ -842,6 +856,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { maybeSpeakBootGreeting("resume"); } catch (Throwable ignored) {}
         try { startIlluminationPolling(); } catch (Throwable ignored) {}
         try { if (navCard != null) navCard.onHostResumed(); } catch (Throwable ignored) {}
+        applyHomeNavLayout(NavState.isActive());
         try { atenderVozPendiente(); } catch (Throwable ignored) {}
     }
 
@@ -1192,6 +1207,21 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         buildTelemetryBar();
         buildDock();
         buildFloatingAi();
+
+        // Marco discreto donde cae el PiP de Maps por defecto (x≈700..995, y=70..445).
+        pipZone = new View(this);
+        GradientDrawable pipFrame = new GradientDrawable();
+        pipFrame.setShape(GradientDrawable.RECTANGLE);
+        pipFrame.setCornerRadius(12 * s);
+        pipFrame.setColor(0x0AFFFFFF);
+        pipFrame.setStroke(Math.max(1, (int) (2 * s)), 0x44FFFFFF);
+        pipZone.setBackground(pipFrame);
+        place(board, pipZone, 560, 58, 244, 312);
+        pipZone.setVisibility(View.GONE);
+
+        NavState.removeListener(homeNavListener);
+        NavState.addListener(homeNavListener);
+        applyHomeNavLayout(NavState.isActive());
 
         try { if (parked != null) parked.attach(root); } catch (Throwable ignored) {}
 
@@ -1802,6 +1832,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         FrameLayout card = new FrameLayout(this);
         card.setBackground(round(CARD, 20));
         place(board, card, 324, 64, 431, 372);
+        navCardView = card;
 
         // Sin mapa offline: el card refleja la notificación de navegación activa.
         navCard = new NavigationCardHost(this, card);
@@ -1854,6 +1885,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
 
     private void buildAudioCard() {
         FrameLayout card = card(761, 64, 253, 372, CARD);
+        audioCardView = card;
         placeWrap(card, tv("AUDIO", 11, MUTED, true), 18, 14);
         sourceTv = tv("", 11, RED, true);
         sourceTv.setGravity(Gravity.RIGHT);
@@ -1869,16 +1901,16 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         timePosTv = tv("", 12, MUTED, false);
         timePosTv.setGravity(Gravity.CENTER_HORIZONTAL);
         place(card, timePosTv, 14, 274, 220, 18);
-        View prev = circleIcon("skip_previous", 52, 26, BTN);
-        View play = circleIcon("play_arrow", 64, 32, RED);
-        playIc = (ImageView) ((FrameLayout) play).getChildAt(0);
-        View next = circleIcon("skip_next", 52, 26, BTN);
-        place(card, prev, 30, 304, 52, 52);
-        place(card, play, 92, 298, 64, 64);
-        place(card, next, 166, 304, 52, 52);
-        prev.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PREVIOUS));
-        play.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
-        next.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_NEXT));
+        audioPrev = circleIcon("skip_previous", 52, 26, BTN);
+        audioPlay = circleIcon("play_arrow", 64, 32, RED);
+        playIc = (ImageView) ((FrameLayout) audioPlay).getChildAt(0);
+        audioNext = circleIcon("skip_next", 52, 26, BTN);
+        place(card, audioPrev, 30, 304, 52, 52);
+        place(card, audioPlay, 92, 298, 64, 64);
+        place(card, audioNext, 166, 304, 52, 52);
+        audioPrev.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PREVIOUS));
+        audioPlay.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        audioNext.setOnClickListener(mediaClick(KeyEvent.KEYCODE_MEDIA_NEXT));
         card.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) { showPlayerDiag(); return true; }
         });
@@ -1891,6 +1923,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         FrameLayout bar = new FrameLayout(this);
         bar.setBackground(round(CARD, 16));
         place(board, bar, 10, 442, 1004, 82);
+        telemetryBarView = bar;
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -2744,6 +2777,62 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         c.setBackground(round(color, 20));
         place(board, c, x, y, w, hh);
         return c;
+    }
+
+    /** Reposiciona una vista ya añadida (place() solo sirve para añadir). */
+    private void move(View v, float x, float y, float w, float hh) {
+        if (v == null) return;
+        ViewGroup.LayoutParams base = v.getLayoutParams();
+        if (!(base instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) base;
+        lp.width = (int) (w * s);
+        lp.height = (int) (hh * s);
+        lp.leftMargin = (int) (x * s);
+        lp.topMargin = (int) (y * s);
+        lp.gravity = Gravity.TOP | Gravity.LEFT;
+        v.setLayoutParams(lp);
+    }
+
+    /**
+     * Con ruta activa el PiP de Maps cae por defecto en x≈700..995, y=70..445:
+     * la guía se estrecha al centro, el audio baja a la derecha y la telemetría
+     * se queda a la izquierda. Sin ruta se recupera el layout original.
+     */
+    private void applyHomeNavLayout(boolean active) {
+        if (navCardView == null || audioCardView == null || telemetryBarView == null) return;
+        if (active) {
+            move(navCardView, 324, 64, 232, 372);
+            move(audioCardView, 560, 378, 244, 150);
+            move(telemetryBarView, 10, 442, 546, 82);
+            move(playerArt, 8, 6, 52, 52);
+            move(sourceTv, 64, 8, 90, 14);
+            move(trackTv, 64, 24, 168, 20);
+            artistTv.setVisibility(View.GONE);
+            timePosTv.setVisibility(View.GONE);
+            move(audioPrev, 12, 62, 40, 40);
+            move(audioPlay, 66, 56, 50, 50);
+            move(audioNext, 130, 62, 40, 40);
+            if (pipZone != null) pipZone.setVisibility(View.VISIBLE);
+        } else {
+            move(navCardView, 324, 64, 431, 372);
+            move(audioCardView, 761, 64, 253, 372);
+            move(telemetryBarView, 10, 442, 1004, 82);
+            move(playerArt, 34, 34, 180, 180);
+            move(sourceTv, 80, 14, 150, 16);
+            move(trackTv, 14, 222, 220, 24);
+            artistTv.setVisibility(View.VISIBLE);
+            move(artistTv, 14, 250, 220, 20);
+            timePosTv.setVisibility(View.VISIBLE);
+            move(timePosTv, 14, 274, 220, 18);
+            move(audioPrev, 30, 304, 52, 52);
+            move(audioPlay, 92, 298, 64, 64);
+            move(audioNext, 166, 304, 52, 52);
+            if (pipZone != null) pipZone.setVisibility(View.GONE);
+        }
+        if (navCard != null) navCard.setCompact(active);
+        navCardView.requestLayout();
+        audioCardView.requestLayout();
+        telemetryBarView.requestLayout();
     }
 
     private ImageView icon(String name, float size) {

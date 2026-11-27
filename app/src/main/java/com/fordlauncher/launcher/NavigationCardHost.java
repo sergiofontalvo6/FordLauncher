@@ -8,10 +8,10 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
-import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -24,9 +24,9 @@ import java.util.Locale;
 
 /**
  * Tarjeta de navegación del HOME. Sin ruta ofrece Waze / Maps y accesos rápidos;
- * con ruta activa muestra el turn-by-turn de la notificación en la mitad
- * izquierda y reserva la derecha para la miniatura PiP de Google Maps.
- * No crea ventanas flotantes ni servicios propios: el PiP lo dibuja el sistema.
+ * con ruta activa muestra el turn-by-turn completo (sin hueco interno) en la
+ * columna central, mientras el sistema dibuja el PiP de Maps a la derecha.
+ * No crea ventanas flotantes ni servicios propios.
  */
 public final class NavigationCardHost implements NavState.Listener {
 
@@ -37,10 +37,10 @@ public final class NavigationCardHost implements NavState.Listener {
     private View idle;
     private View route;
     private ImageView arrow;
-    private TextView distanceTv, maneuverTv, etaTv, appTv, openTv, pipHint;
-    private LinearLayout pipDock;
+    private TextView distanceTv, maneuverTv, etaTv, appTv, openTv;
     private Bitmap icon;
     private String routePkg, lastDistance, lastManeuver;
+    private boolean compact;
 
     public NavigationCardHost(Activity activity, FrameLayout card) {
         this.activity = activity;
@@ -75,6 +75,30 @@ public final class NavigationCardHost implements NavState.Listener {
                 render(NavState.get());
             }
         });
+    }
+
+    /** Lo llama el HOME cuando el card se estrecha para dejar sitio al PiP. */
+    public void setCompact(final boolean value) {
+        activity.runOnUiThread(new Runnable() {
+            public void run() {
+                compact = value;
+                applyCompact();
+            }
+        });
+    }
+
+    private void applyCompact() {
+        if (arrow == null || distanceTv == null || maneuverTv == null) return;
+        ViewGroup.LayoutParams base = arrow.getLayoutParams();
+        if (base != null) {
+            int d = (int) ((compact ? 50 : 58) * scale());
+            base.width = d;
+            base.height = d;
+            arrow.setLayoutParams(base);
+        }
+        distanceTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, compact ? 24 : 26);
+        maneuverTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, compact ? 12 : 13);
+        maneuverTv.setMaxLines(compact ? 3 : 2);
     }
 
     @Override
@@ -123,7 +147,6 @@ public final class NavigationCardHost implements NavState.Listener {
         distanceTv.setText(formatoDistancia(dist.length() > 0 ? dist : "Ruta activa"));
         maneuverTv.setText(nombreCalle(man.length() > 0 ? man : "Navegando"));
         etaTv.setText(eta.length() > 0 ? eta : "");
-        pipHint.setText(NavigationLauncher.wantsPip(routePkg) ? "Mapa PiP" : "Waze · segundo plano");
 
         if (d.icon != null) icon = d.icon;
         if (icon != null && !icon.isRecycled()) arrow.setImageBitmap(icon);
@@ -222,45 +245,20 @@ public final class NavigationCardHost implements NavState.Listener {
         row.addView(b, lp);
     }
 
-    /** Card con ruta: 52% maniobra y ETA / 48% hueco para el PiP de Maps. */
+    /** Card con ruta: la guía ocupa el 100% del ancho; el PiP va fuera, a la derecha. */
     private View buildRoute() {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding((int) (12 * scale()), (int) (26 * scale()),
                 (int) (12 * scale()), (int) (12 * scale()));
-
-        LinearLayout split = new LinearLayout(activity);
-        split.setOrientation(LinearLayout.HORIZONTAL);
-        split.addView(buildTurnSide(), new LinearLayout.LayoutParams(0, -1, 0.52f));
-
-        pipDock = new LinearLayout(activity);
-        pipDock.setOrientation(LinearLayout.VERTICAL);
-        pipDock.setGravity(Gravity.CENTER);
-        GradientDrawable frame = new GradientDrawable();
-        frame.setShape(GradientDrawable.RECTANGLE);
-        frame.setCornerRadius(12 * scale());
-        frame.setColor(0x0AFFFFFF);
-        frame.setStroke(Math.max(1, (int) (2 * scale())), 0x55FFFFFF);
-        pipDock.setBackground(frame);
-        pipHint = text("Mapa PiP", 11, 0x99FFFFFF, true);
-        pipHint.setGravity(Gravity.CENTER);
-        pipDock.addView(pipHint);
-        LinearLayout.LayoutParams dockLp = new LinearLayout.LayoutParams(0, -1, 0.48f);
-        dockLp.leftMargin = (int) (8 * scale());
-        split.addView(pipDock, dockLp);
-
-        LinearLayout.LayoutParams splitLp = new LinearLayout.LayoutParams(-1, -1);
-        root.addView(split, splitLp);
+        root.addView(buildTurnSide(), new LinearLayout.LayoutParams(-1, -1));
         root.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { bringToFront(); }
-        });
-        pipDock.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { bringToFront(); }
         });
         return root;
     }
 
-    /** Mitad izquierda: app, flecha, distancia grande, calle en 2 líneas y ETA. */
+    /** Columna central: app, flecha grande, distancia, calle en 2–3 líneas y ETA. */
     private LinearLayout buildTurnSide() {
         LinearLayout left = new LinearLayout(activity);
         left.setOrientation(LinearLayout.VERTICAL);
@@ -282,7 +280,7 @@ public final class NavigationCardHost implements NavState.Listener {
         col.setOrientation(LinearLayout.VERTICAL);
         distanceTv = text("—", 26, Color.WHITE, true);
         maneuverTv = text("Ruta activa", 13, Color.WHITE, false);
-        maneuverTv.setMaxLines(2);
+        maneuverTv.setMaxLines(3);
         maneuverTv.setEllipsize(TextUtils.TruncateAt.END);
         col.addView(distanceTv);
         LinearLayout.LayoutParams mnp = new LinearLayout.LayoutParams(-1, -2);
@@ -311,6 +309,7 @@ public final class NavigationCardHost implements NavState.Listener {
     private void bringToFront() { NavigationLauncher.bringToFront(activity, routePkg); }
 
     private float scale() {
+        if (compact) return 1f;
         return card.getWidth() > 0 ? card.getWidth() / 431f : 1.2f;
     }
 
