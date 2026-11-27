@@ -64,7 +64,11 @@ public final class VoiceActionParser {
                 (t.contains("en sermusic") && (t.contains("poniendo") || t.contains("reproduciendo")));
         boolean userMusic =
                 u.startsWith("pon ") || u.startsWith("pone ") || u.startsWith("ponme ") ||
+                u.startsWith("coloca ") || u.startsWith("coloque ") || u.startsWith("colocar ") ||
+                u.startsWith("dame ") ||
                 u.startsWith("reproduce ") || u.startsWith("reproducir ") ||
+                u.startsWith("quiero escuchar ") ||
+                u.startsWith("me gustaría escuchar ") || u.startsWith("me gustaria escuchar ") ||
                 u.startsWith("escuchar ") || u.startsWith("escucha ") ||
                 u.startsWith("toca ") || u.startsWith("tocar ");
         return geminiMusic || userMusic;
@@ -73,8 +77,9 @@ public final class VoiceActionParser {
     public static String extractMusicQuery(String fuente) {
         String s = fuente == null ? "" : fuente.trim();
         s = s.replaceFirst("(?i)^(poniendo|reproduciendo|sonando|tocando)\\s+", "");
-        s = s.replaceFirst("(?i)^(pon|pone|ponme|reproduce|reproducir|escuchar|escucha|toca|tocar|quiero escuchar|me gustar[íi]a escuchar)\\s+", "");
-        s = s.replaceFirst("(?i)^(una|la|el|un|las|los)\\s+", "");
+        s = s.replaceFirst("(?i)^(coloca|coloque|colocar|dame|me gustar[íi]a escuchar)\\s+", "");
+        s = s.replaceFirst("(?i)^(pon|pone|ponme|reproduce|reproducir|escuchar|escucha|toca|tocar|quiero escuchar)\\s+", "");
+        s = s.replaceFirst("(?i)^(una|la|el|un|las|los|mi|mis)\\s+", "");
         s = s.replaceFirst("(?i)^(canci[óo]n|cancion|tema|m[úu]sica|musica|artista)\\s+(de\\s+)?", "");
         s = s.replaceFirst("(?i)^(de\\s+)", "");
         s = s.replaceFirst("(?i)\\s+(en|con|de)\\s+SerMusic\\s*$", "");

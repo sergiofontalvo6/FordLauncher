@@ -145,6 +145,11 @@ public final class AssistantActionEngine {
     /** Igual que Main.procesarRespuestaGemini: la acción se parsea del raw, no de limpiarParaVoz(). */
     public void procesarRespuestaGemini(String text, String error, String userSpeech) {
         if (error != null || text == null) {
+            // Un fallo de Gemini (sin clave o sin red) NUNCA debe convertir una
+            // petición de música en un aviso de API: la música se resuelve aquí.
+            Log.w(TAG, "Gemini sin respuesta error=" + error + " userSpeech=\"" + userSpeech + "\"");
+            if (ejecutarMusicaGenericaLocal(ContactNames.norm(userSpeech))) return;
+            if (ejecutarMusicaPorTexto(text, userSpeech)) return;
             host.setIdle();
             host.notifyUser(error != null ? error : "Sin respuesta de la IA");
             return;
@@ -432,17 +437,25 @@ public final class AssistantActionEngine {
             return true;
         }
 
-        String[] musicVerbs = {"reproduce ", "reproducir ", "ponme ", "pon ", "toca ", "tocar ",
-                "escuchar ", "quiero escuchar ", "pon la musica ", "pon musica ", "pon la cancion ",
+        String[] musicVerbs = {"reproduce ", "reproducir ", "ponme ", "pon ", "pone ", "poner ",
+                "coloca ", "coloque ", "colocar ", "dame ", "toca ", "tocar ",
+                "escuchar ", "escucha ", "quiero escuchar ", "me gustaría escuchar ",
+                "me gustaria escuchar ", "pon la musica ", "pon musica ", "pon la cancion ",
                 "pon la canción ", "buscar cancion ", "buscar canción ", "busca la cancion ",
                 "busca la canción ", "busca cancion ", "busca canción "};
         for (String v : musicVerbs) {
             if (!rawLower.startsWith(v)) continue;
             String q = raw.trim().substring(v.length()).trim();
-            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis|cancion|canción|tema)\\s+", "").trim();
-            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis)\\s+", "").trim();
-            q = q.replaceFirst("(?i)^(cancion|canción|tema)\\s+", "").trim();
-            if (q.length() == 0) return false;
+            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis|tu|tus|canciones|cancion|canción|temas|tema|musica|música)(\\s+|$)", "").trim();
+            q = q.replaceFirst("(?i)^(la|el|los|las|un|una|mi|mis|tu|tus)(\\s+|$)", "").trim();
+            q = q.replaceFirst("(?i)^(canciones|cancion|canción|temas|tema|musica|música)(\\s+|$)", "").trim();
+            q = q.replaceFirst("(?i)^(de|del|por|para)\\s+", "").trim();
+            String qCheck = ContactNames.norm(q);
+            if (qCheck.equals("internet") || qCheck.equals("con internet")
+                    || qCheck.equals("sin internet")) q = "musica";
+            if (q.length() == 0) {
+                return ejecutarMusicaEnSerMusic("musica", "Reproduciendo tu música.");
+            }
             String qNorm = ContactNames.norm(q);
             if (contienePalabra(qNorm, "radio") || contienePalabra(qNorm, "fm")) {
                 boolean handled = host.openDock("radio", pendingJson("OPEN_DOCK", "radio", "Radio."));
@@ -585,12 +598,35 @@ public final class AssistantActionEngine {
         return true;
     }
 
-    /** "Pon música"/"mis canciones" sin artista: abre SerMusic sin pasar por Gemini. */
+    /**
+     * Peticiones de música sin artista concreto ("pon música", "coloca una canción", ...).
+     * Se resuelven en el equipo: con red se abre SerMusic online y sin red su música
+     * descargada. Nunca se consulta a Gemini, así que no aparece el aviso de API.
+     */
     private boolean ejecutarMusicaGenericaLocal(String n) {
-        String[] frases = {"musica", "mi musica", "mis musicas", "canciones", "mis canciones",
-                "reproduce musica", "pon musica", "pone musica", "escuchar musica", "sermusic"};
-        for (String f : frases) if (f.equals(n)) return ejecutarMusicaEnSerMusic("musica", "Reproduciendo tu música.");
+        String s = n == null ? "" : n.trim();
+        String[] frases = {"musica", "mi musica", "mis musicas", "tu musica", "canciones",
+                "mis canciones", "una cancion", "reproduce musica", "reproducir musica",
+                "pon musica", "pone musica", "poner musica", "escuchar musica",
+                "escucha musica", "quiero escuchar musica", "me gustaria escuchar musica",
+                "sermusic", "reproductor", "reproductor de musica"};
+        for (String f : frases) if (f.equals(s)) return reproducirMusicaGenerica();
+
+        // "coloca/coloque/pon/reproduce/... una canción" (o "la canción", "un tema", ...)
+        // sin artista: también es música genérica.
+        String rest = s.replaceFirst(
+                "^(coloca|coloque|colocar|pon|pone|poner|ponme|dame|reproduce|reproducir|"
+                        + "escucha|escuchar|toca|tocar|quiero escuchar|me gusta escuchar|"
+                        + "me gustaria escuchar|busca|buscar)\\s+",
+                "");
+        if (rest.equals(s) || rest.length() == 0) return false;
+        rest = rest.replaceFirst("^(una|un|la|el|las|los|mi|mis|tu|tus)\\s+", "").trim();
+        if (rest.matches("(cancion|canciones|tema|temas|musica)")) return reproducirMusicaGenerica();
         return false;
+    }
+
+    private boolean reproducirMusicaGenerica() {
+        return ejecutarMusicaEnSerMusic("musica", "Reproduciendo tu música.");
     }
 
     /** Mismo snapshot que Main.fabSnapshot(): el prompt de Gemini ve el estado real del vehículo. */
