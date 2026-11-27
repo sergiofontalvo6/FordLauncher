@@ -6,12 +6,9 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 
 /**
- * Lanzador único de rutas del HOME y de los comandos de voz.
- *
- * Google Maps es la única app que deja una miniatura flotante (PiP) sobre el
- * lado derecho del card mientras se conduce; Waze publica el turn-by-turn en
- * segundo plano. {@link #open(Context, String, boolean)} permite forzar Maps
- * cuando el conductor pide explícitamente el mini mapa.
+ * Lanzador de rutas por voz hacia la app predeterminada en Ajustes → Mapa y clima.
+ * Siempre abre la navegación a pantalla completa: FordLauncher no crea ni
+ * solicita ventanas flotantes (PiP) sobre el tablero.
  */
 public final class NavigationLauncher {
 
@@ -32,23 +29,9 @@ public final class NavigationLauncher {
 
     public static String appLabel(Context c) { return isMaps(c) ? "Google Maps" : "Waze"; }
 
-    public static String appLabelFor(String pkg) {
-        if (MAPS.equals(pkg)) return "Google Maps";
-        if (WAZE.equals(pkg)) return "Waze";
-        return null;
-    }
-
-    /** Abre la app preferida; con destino arranca la ruta. */
+    /** Abre la app preferida; con destino arranca la ruta directamente. */
     public static boolean open(Context c, String destino) {
-        return open(c, destino, isMaps(c));
-    }
-
-    /**
-     * @param forceMaps true cuando se pide el mini mapa PiP: Google Maps es la
-     *                  única navegador que puede dejar la ventana flotante.
-     */
-    public static boolean open(Context c, String destino, boolean forceMaps) {
-        boolean maps = forceMaps;
+        boolean maps = isMaps(c);
         String pkg = maps ? MAPS : WAZE;
         try {
             Uri uri;
@@ -67,7 +50,7 @@ public final class NavigationLauncher {
             try {
                 Intent launch = c.getPackageManager().getLaunchIntentForPackage(pkg);
                 if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
                     c.startActivity(launch);
                     return true;
                 }
@@ -75,19 +58,4 @@ public final class NavigationLauncher {
             return false;
         }
     }
-
-    /** Trae al frente la app que está publicando la ruta (o la preferida). */
-    public static boolean bringToFront(Context c, String pkg) {
-        String target = pkg != null ? pkg : (isMaps(c) ? MAPS : WAZE);
-        try {
-            Intent i = c.getPackageManager().getLaunchIntentForPackage(target);
-            if (i == null) return false;
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            c.startActivity(i);
-            return true;
-        } catch (Throwable t) { return false; }
-    }
-
-    /** Sirve para la nota de Ajustes y para el texto guía del hueco derecho. */
-    public static boolean wantsPip(String pkg) { return MAPS.equals(pkg); }
 }

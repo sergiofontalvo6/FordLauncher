@@ -45,18 +45,6 @@
             </intent-filter>
         </activity>
         <!--
-            Turn-by-turn en vivo: lee la notificación de navegación de Waze o
-            Google Maps. No abre ventanas propias ni servicios adicionales.
-        -->
-        <service android:name="com.fordlauncher.launcher.nav.NavigationNotificationListener"
-            android:label="Ford Launcher · navegación"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true" android:stopWithTask="false">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService"/>
-            </intent-filter>
-        </service>
-        <!--
             Voz del sistema/volante: actividad transparente en su PROPIA tarea.
             Reenvía la orden al servicio flotante y se cierra sin abrir el Home.
             La afinidad de tarea distinta evita que se traiga al frente la tarea

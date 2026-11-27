@@ -3,7 +3,6 @@ package com.fordlauncher.launcher.ai;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Build;
 import android.media.AudioManager;
 import android.provider.Settings;
@@ -587,30 +586,26 @@ public final class AssistantActionEngine {
 
     /** Navegación local: TTS inmediato y ruta directa en la app elegida (Waze o Maps). */
     private boolean ejecutarNavegacionLocal(String n) {
-        boolean navegar = n.startsWith("navega") || n.contains("navegacion") || n.contains("guiame")
-                || n.contains("lle name") || n.contains("llevame") || n.contains("waze")
-                || n.contains("google maps") || n.contains("maps");
+        boolean navegar = n.startsWith("navega") || n.startsWith("ruta") || n.contains("navegacion")
+                || n.contains("guiame") || n.contains("lle name") || n.contains("llevame")
+                || n.contains("waze") || n.contains("google maps") || n.contains("maps");
         if (!navegar) return false;
 
         String destino = extraerDestinoNavegacion(n);
         android.content.SharedPreferences sp = ctx.getSharedPreferences(
                 "launcher", android.content.Context.MODE_PRIVATE);
-        // "Mini mapa / PiP / ventanita" fuerza Google Maps: es la única app que
-        // deja la ventana flotante sobre el lado derecho del card del HOME.
-        boolean pip = n.contains("pip") || n.contains("miniatura") || n.contains("ventanita")
-                || n.contains("mini mapa") || n.contains("minimapa");
-        boolean maps = pip || NavigationLauncher.isMaps(ctx);
+        boolean maps = NavigationLauncher.isMaps(ctx);
         String appNombre = maps ? "Google Maps" : "Waze";
         if (esCasa(destino)) destino = sp.getString("nav_home", "casa");
         else if (esTrabajo(destino)) destino = sp.getString("nav_work", "trabajo");
 
         String decir = destino.length() > 0
-                ? "Iniciando ruta hacia " + destino + (pip ? " con mini mapa flotante" : "")
+                ? "Iniciando ruta hacia " + destino
                 : "Abriendo " + appNombre + ".";
         host.showText(decir);
         host.speak(decir, false);
 
-        boolean ok = NavigationLauncher.open(ctx, destino, maps);
+        boolean ok = NavigationLauncher.open(ctx, destino);
         if (!ok) {
             try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, appNombre); } catch (Throwable ignored) { }
         }
