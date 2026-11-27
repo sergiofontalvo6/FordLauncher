@@ -44,56 +44,6 @@ public class DebugCommandReceiver extends BroadcastReceiver {
                     + com.fordlauncher.launcher.Net.isNetworkAvailable(context));
             return;
         }
-        // Hook de pruebas: estado del motor neuronal offline.
-        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es sherpa_status 1
-        String sherpaStatus = intent.getStringExtra("sherpa_status");
-        if (sherpaStatus != null) {
-            // Si el broadcast arranca un proceso nuevo, también dispara la carga.
-            com.fordlauncher.launcher.ai.SherpaTtsEngine.get().precalentar(context);
-            android.util.Log.i("FordLauncher/VoiceCmd", com.fordlauncher.launcher.ai.SherpaTtsEngine
-                    .get().estadoDetallado(context));
-            return;
-        }
-        // Hook de pruebas: muestra de un speaker (0-9) por Supertonic 3.
-        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es sherpa_test 1 --ei sid 3
-        String sherpaTest = intent.getStringExtra("sherpa_test");
-        if (sherpaTest != null) {
-            int sid = intent.getIntExtra("sid", -1);
-            if (sid < 0) sid = com.fordlauncher.launcher.ai.SherpaTtsEngine.speakerPreferido(context);
-            android.util.Log.i("FordLauncher/VoiceCmd", "sherpa_test sid=" + sid);
-            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(context)
-                    .previsualizarSupertonic(sid);
-            return;
-        }
-        // Hook de pruebas: síntesis directa, sin pasar por TextToSpeechManager.
-        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es sherpa_direct "Hola" --ei sid 0
-        String sherpaDirect = intent.getStringExtra("sherpa_direct");
-        if (sherpaDirect != null) {
-            int sid = intent.getIntExtra("sid", 0);
-            android.util.Log.i("FordLauncher/VoiceCmd", "sherpa_direct sid=" + sid
-                    + " texto=" + sherpaDirect);
-            com.fordlauncher.launcher.ai.SherpaTtsEngine.get().speak(sherpaDirect, sid,
-                    new com.fordlauncher.launcher.ai.SherpaTtsEngine.Callback() {
-                        public void onDone() { android.util.Log.i("FordLauncher/VoiceCmd", "sherpa_direct done"); }
-                        public void onError(String msg) { android.util.Log.w("FordLauncher/VoiceCmd", "sherpa_direct error=" + msg); }
-                    });
-            return;
-        }
-        // Hook de pruebas: fija la voz de nube sin pasar por la UI (no altera
-        // el speaker offline ni el motor local).
-        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es set_tts_voice edge:es-CO-GonzaloNeural
-        String setVoice = intent.getStringExtra("set_tts_voice");
-        if (setVoice != null) {
-            android.content.SharedPreferences p = context.getSharedPreferences("launcher", 0);
-            if ("auto".equalsIgnoreCase(setVoice) || setVoice.length() == 0) {
-                p.edit().remove("tts_voice").apply();
-            } else {
-                p.edit().putString("tts_voice", setVoice).apply();
-            }
-            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(context).reiniciarVoz();
-            android.util.Log.i("FordLauncher/VoiceCmd", "set_tts_voice=" + p.getString("tts_voice", "auto"));
-            return;
-        }
         String alert = intent.getStringExtra("alert");
         if (alert != null) {
             android.util.Log.i("FordLauncher/VoiceCmd", "debug: alerta simulada " + alert);

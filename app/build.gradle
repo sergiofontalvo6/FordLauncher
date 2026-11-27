@@ -16,12 +16,8 @@ android {
         minSdk 16
         // 28 a propósito: mantiene el comportamiento probado en pantallas viejas y nuevas.
         targetSdk 28
-        versionCode 51
-        versionName '2.10.18'
-        // sherpa-onnx solo publica nativas desde API 21. El guardián en
-        // SherpaTtsEngine impide usarlas en API 16-20; el resto de la app sigue
-        // funcionando en Android 4.1+ con el TTS del sistema.
-        ndk { abiFilters 'armeabi-v7a' }
+        versionCode 50
+        versionName '2.10.17'
     }
 
     signingConfigs {
@@ -109,8 +105,4 @@ tasks.named('preBuild') { dependsOn legacyJar }
 
 dependencies {
     implementation files(layout.buildDirectory.file('intermediates/hiddenapi/fordlauncher-legacy-rc.jar')).builtBy(legacyJar)
-    // Voz neuronal 100 % offline (Supertonic 3 int8). AAR local: sherpa-onnx no
-    // publica este artefacto en Maven Central ni en JitPack.
-    implementation files('libs/sherpa-onnx-2.0.3.aar')
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
 }

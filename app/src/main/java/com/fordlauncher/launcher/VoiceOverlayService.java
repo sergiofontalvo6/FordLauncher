@@ -148,11 +148,6 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         // startForeground() lo antes posible: en el AC8227L el arranque en frío
         // es lento y Android mata el proceso si tarda más de 5 s.
         crearNotificacion();
-        // Carga Supertonic 3 fuera del hilo principal; no entra en el timeout
-        // de 12 s del motor del sistema ni retrasa el botón flotante.
-        try {
-            com.fordlauncher.launcher.ai.SherpaTtsEngine.get().precalentar(this);
-        } catch (Throwable ignored) {}
         try {
             final Main m = Main.instance();
             if (m != null) main.post(new Runnable() { public void run() { m.syncFloatingAi(); } });

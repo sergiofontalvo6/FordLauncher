@@ -88,9 +88,6 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         this.audioManager = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
         migrarVozMasculinaNube();
         inicializarMotor();
-        // Carga neuronal en segundo plano; no bloquea el arranque ni el timeout
-        // de 12 s del TTS del sistema. Los servicios también lo solicitan.
-        SherpaTtsEngine.get().precalentar(this.context);
     }
 
     public static synchronized TextToSpeechManager getInstance(Context context) {
@@ -133,7 +130,6 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
      */
     public void precalentar() {
         Log.i(TAG, "precalentar: voz configurada=" + vozConfigurada());
-        SherpaTtsEngine.get().precalentar(context);
         try {
             if (!isInitialized && !initializing) inicializarMotor();
         } catch (Throwable ignored) {}
@@ -187,8 +183,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                             main.postDelayed(new Runnable() {
                                 public void run() {
                                     if (edge == null) {
-                                        Log.w(TAG, "EdgeVoiceSpeaker no disponible, usando Supertonic 3");
-                                        hablarLocal(t, true);
+                                        Log.w(TAG, "EdgeVoiceSpeaker no disponible, usando motor local");
+                                        hablarLocal(t);
                                         return;
                                     }
                                     Log.i(TAG, "Reintentando voz de nube con la misma voz configurada");
@@ -197,8 +193,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                             }, 1800L);
                             return;
                         }
-                        Log.w(TAG, "Voz de nube no disponible tras reintento, usando Supertonic 3");
-                        hablarLocal(t, true);
+                        Log.w(TAG, "Voz de nube no disponible tras reintento, usando motor local");
+                        hablarLocal(t);
                     }
                 });
             }
@@ -406,7 +402,6 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         // que la advertencia se escuche de inmediato.
         try { if (tts != null) tts.stop(); } catch (Throwable ignored) {}
         if (edge != null) { try { edge.stop(); } catch (Throwable ignored) {} }
-        SherpaTtsEngine.get().stop();
         hablarTextoLargoInterno(textoCompleto, true);
     }
 
@@ -419,14 +414,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         if (!offline) {
             boolean sinRed = !Net.isNetworkAvailable(context);
             String nube = vozNubePreferida();
-            if (nube != null && !sinRed) {
-                // Con internet se respeta la voz elegida en Ajustes IA; solo si
-                // la nube falla se cae al respaldo neuronal offline.
-                if (hablarNube(nube, limpio)) return;
-                offline = true;
-            } else if (sinRed) {
-                offline = true;
-            }
+            if (nube != null && !sinRed && hablarNube(nube, limpio)) return;
+            if (sinRed) offline = true;
         }
         hablarLocal(limpio, offline);
     }
@@ -448,37 +437,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private void hablarLocal(String limpio) { hablarLocal(limpio, false); }
 
     private void hablarLocal(String limpio, boolean offline) {
-        pendingOffline = offline;
-        if (offline && SherpaTtsEngine.get().estaListo() && !SherpaTtsEngine.get().estaOcupada()) {
-            Log.i(TAG, "Voz sin conexión: Supertonic 3 int8 (sid="
-                    + SherpaTtsEngine.speakerPreferido(context) + ")");
-            solicitarAudioDucking();
-            setSpeaking(true);
-            SherpaTtsEngine.get().speak(limpio, SherpaTtsEngine.speakerPreferido(context),
-                    new SherpaTtsEngine.Callback() {
-                        public void onDone() { terminar(null); }
-                        public void onError(String msg) {
-                            Log.w(TAG, msg + "; último recurso: motor del sistema");
-                            hablarConMotorSistema(limpio);
-                        }
-                    });
-            return;
-        }
-        if (offline) {
-            // Arranca en frío (o el nativo sigue ocupado): se usa el TTS del
-            // sistema solo de forma temporal, sin encolar trabajo detrás.
-            Log.i(TAG, "Supertonic 3 no disponible en este instante; TTS del sistema temporalmente");
-            SherpaTtsEngine.get().precalentar(context);
-        }
-        solicitarAudioDucking();
-        setSpeaking(true);
-        hablarConMotorSistema(limpio);
-    }
-
-    private void hablarConMotorSistema(String limpio) {
         if (!isInitialized) {
             pendingQueue.clear();
             pendingQueue.add(limpio);
+            pendingOffline = offline;
             setSpeaking(true);
             inicializarMotor();
             return;
@@ -490,6 +452,8 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         }
         if (fragmentos.isEmpty()) return;
 
+        solicitarAudioDucking();
+        setSpeaking(true);
         long stamp = System.currentTimeMillis();
         for (int i = 0; i < fragmentos.size(); i++) {
             boolean ultimo = (i == fragmentos.size() - 1);
@@ -517,34 +481,12 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         try { liberarAudioDucking(); } catch (Throwable ignored) {}
     }
 
-    /** Vista previa del speaker elegido en Ajustes IA (siempre por la ruta offline). */
-    public synchronized void previsualizarSupertonic(int sid) {
-        detener();
-        SherpaTtsEngine.get().precalentar(context);
-        String texto = "Hola, esta es mi voz sin conexión.";
-        if (!SherpaTtsEngine.get().estaListo() || SherpaTtsEngine.get().estaOcupada()) {
-            texto = "La voz sin conexión todavía se está cargando.";
-            hablarLocal(texto, false);
-            return;
-        }
-        solicitarAudioDucking();
-        setSpeaking(true);
-        SherpaTtsEngine.get().speak(texto, sid, new SherpaTtsEngine.Callback() {
-            public void onDone() { terminar(null); }
-            public void onError(String msg) {
-                Log.w(TAG, "Preview Supertonic falló: " + msg);
-                terminar(msg);
-            }
-        });
-    }
-
     public synchronized void detener() {
         pendingQueue.clear();
         if (edge != null) {
             try { edge.stop(); } catch (Throwable ignored) {}
         }
         try { if (tts != null) tts.stop(); } catch (Throwable ignored) {}
-        SherpaTtsEngine.get().stop();
         terminar(null);
     }
 
