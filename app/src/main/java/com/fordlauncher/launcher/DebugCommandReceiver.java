@@ -91,6 +91,28 @@ public class DebugCommandReceiver extends BroadcastReceiver {
             com.fordlauncher.launcher.VoiceTrigger.fire(context, "adb debug " + voice);
             return;
         }
+        // Prueba ADB: inyecta el estado turn-by-turn del card sin depender de Waze.
+        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es navtest 1
+        //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es navtest clear
+        String navTest = intent.getStringExtra("navtest");
+        if (navTest != null) {
+            if ("clear".equals(navTest)) {
+                com.fordlauncher.launcher.nav.NavState.clear("com.waze");
+                android.util.Log.i("FordLauncher/NavNotif", "navtest: estado limpiado");
+            } else {
+                android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
+                        64, 64, android.graphics.Bitmap.Config.RGB_565);
+                android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
+                android.graphics.Paint p = new android.graphics.Paint();
+                p.setColor(0xFFE53935);
+                cv.drawCircle(32, 32, 28, p);
+                com.fordlauncher.launcher.nav.NavState.publish(
+                        new com.fordlauncher.launcher.nav.NavState.Data("com.waze", "250 m",
+                                "Gira a la derecha hacia Av. Boyacá", "12 min · 5,4 km", bmp));
+                android.util.Log.i("FordLauncher/NavNotif", "navtest: ruta simulada publicada");
+            }
+            return;
+        }
         if (overlayResp64 != null) {
             try { overlayResp = new String(android.util.Base64.decode(overlayResp64, android.util.Base64.NO_WRAP), "UTF-8"); }
             catch (Throwable ignored) {}

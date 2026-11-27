@@ -27,8 +27,10 @@ Requisitos: JDK 17 y el SDK de Android.
 
 ```
 app/src/main/java/com/fordlauncher/launcher/
-  Main.java          pantalla de inicio, ajustes, diálogos
-  LiveMapView.java   mapa en vivo (teselas OSM, caché, modo oscuro)
+  Main.java                        pantalla de inicio, ajustes, diálogos
+  NavigationCardHost.java          card de navegación del HOME (sin ruta / turn-by-turn)
+  nav/NavigationNotificationListener.java  lector de giros, metros y ETA de Waze/Maps
+  nav/NavState.java                estado compartido de la ruta activa
   NowPlaying.java    pista en reproducción (Android 4.x + avisos de reproductores y Bluetooth)
   MediaWatcher.java  pista en reproducción en Android 5+ (MediaSession)
   BtBridge.java      consulta directa a la app Bluetooth de fábrica (Autochips/Clinkway)

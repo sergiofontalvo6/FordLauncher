@@ -96,8 +96,11 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     private SharedPreferences prefs;
     /** Instancia viva del launcher (la usa el receptor de comandos de depuración). */
     private static Main INSTANCE;
+    /** Card de navegación en vivo: lee notificaciones de Waze / Google Maps. */
+    private static NavigationCardHost NAV_CARD;
 
     static Main instance() { return INSTANCE; }
+    public static NavigationCardHost navCard() { return NAV_CARD; }
     private final Handler h = new Handler();
     /** Motor único del asistente, compartido con el botón flotante global. */
     private com.fordlauncher.launcher.ai.AssistantActionEngine assistant;
@@ -128,7 +131,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     private TextView timeTv, dateTv, greetTv, speedTv, gpsTv, aaBtnTv, aaSubTv, trackTv, artistTv, carTv, chipTv;
     private NowPlaying nowPlaying;
     private Boolean playingState;
-    private TextView sourceTv, timePosTv, mapTagTv, cpSubTv;
+    private TextView sourceTv, timePosTv, cpSubTv;
     // Barra inferior de telemetría (home)
     private TextView rpmText, tempText, consText, oilText;
     private RpmGauge rpmGauge;
@@ -137,7 +140,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     private float odoKmTotal = -1f;
     private float odoLastSavedKm = -1f;
     private Location lastGpsLoc;
-    private LiveMapView liveMap;
+    private NavigationCardHost navCard;
     private MediaWatcher mediaWatcher;
     private boolean askedPerms;
     private boolean askedMediaPerm;
@@ -382,6 +385,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { closePhone(); } catch (Throwable ignored) {}
         try { closeSettings(); } catch (Throwable ignored) {}
         try { closeDrawer(); } catch (Throwable ignored) {}
+        try { if (navCard != null) navCard.onHostResumed(); } catch (Throwable ignored) {}
         android.util.Log.i("FordLauncher/VoiceCmd", "GO_HOME -> dashboard principal (pestañas cerradas)");
     }
 
@@ -798,6 +802,9 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { if (fabVoice != null) fabVoice.destroy(); } catch (Throwable ignored) {}
         try { unregisterReceiver(wakeReceiver); } catch (Throwable ignored) {}
         try { stopIlluminationPolling(); } catch (Throwable ignored) {}
+        try { if (navCard != null) navCard.release(); } catch (Throwable ignored) {}
+        navCard = null;
+        NAV_CARD = null;
         super.onDestroy();
     }
 
@@ -834,6 +841,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         try { if (parked != null) parked.onResume(); } catch (Throwable ignored) {}
         try { maybeSpeakBootGreeting("resume"); } catch (Throwable ignored) {}
         try { startIlluminationPolling(); } catch (Throwable ignored) {}
+        try { if (navCard != null) navCard.onHostResumed(); } catch (Throwable ignored) {}
         try { atenderVozPendiente(); } catch (Throwable ignored) {}
     }
 
@@ -860,7 +868,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (req != 77) return;
         stopGps();
         startGps();
-        seedLastLocation();
     }
 
     @Override
@@ -1788,39 +1795,18 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     }
 
     private void buildAaCard() {
+        if (navCard != null) {
+            try { navCard.release(); } catch (Throwable ignored) { }
+            navCard = null;
+        }
         FrameLayout card = new FrameLayout(this);
+        card.setBackground(round(CARD, 20));
         place(board, card, 324, 64, 431, 372);
-        // fondo decorativo mientras no hay GPS; encima, el mapa en vivo
-        card.addView(new MapView(this, s, 20 * s), new FrameLayout.LayoutParams(-1, -1));
-        liveMap = new LiveMapView(this, s, 20 * s);
-        card.addView(liveMap, new FrameLayout.LayoutParams(-1, -1));
-        liveMap.setVisibility(View.INVISIBLE);
-        liveMap.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { liveMap.cycleZoom(); }
-        });
-        liveMap.setOnLongClickListener(new View.OnLongClickListener() {
-            public boolean onLongClick(View v) {
-                new AlertDialog.Builder(Main.this, dlg())
-                    .setTitle("Diagnóstico del mapa").setMessage(liveMap.diag())
-                    .setPositiveButton("OK", null).show();
-                return true;
-            }
-        });
-        seedLastLocation();
 
-        LinearLayout tag = new LinearLayout(this);
-        tag.setGravity(Gravity.CENTER_VERTICAL);
-        tag.setBackground(round((CARD & 0x00FFFFFF) | 0xE0000000, 12));
-        tag.setPadding((int) (12 * s), (int) (7 * s), (int) (12 * s), (int) (7 * s));
-        tag.addView(icon("my_location", 16), new LinearLayout.LayoutParams((int) (16 * s), (int) (16 * s)));
-        mapTagTv = tv("Buscando GPS…", 13, TEXT, true);
-        mapTagTv.setPadding((int) (8 * s), 0, 0, 0);
-        tag.addView(mapTagTv);
-        placeWrap(card, tag, 16, 16);
-
-        // Sin panel flotante: el mapa a pantalla completa, los botones van en la barra inferior.
-        seedLastLocation();
-        updateMapTag();
+        // Sin mapa offline: el card refleja la notificación de navegación activa.
+        navCard = new NavigationCardHost(this, card);
+        NAV_CARD = navCard;
+        navCard.attach();
     }
 
     /** Botón de proyección: ícono + título + subtítulo (el subtítulo se guarda en getTag()). */
@@ -1864,36 +1850,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         b.addView(col, new LinearLayout.LayoutParams(-1, -2));
         b.setTag(sub);
         return b;
-    }
-
-    // ── mapa en vivo ──
-
-    private void seedLastLocation() {
-        Location best = null;
-        for (String p : new String[]{LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, "passive"}) {
-            try {
-                Location l = lm.getLastKnownLocation(p);
-                if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
-            } catch (Throwable ignored) { }
-        }
-        if (best != null) feedMap(best);
-    }
-
-    private void feedMap(Location l) {
-        if (l != null) { wLat = l.getLatitude(); wLon = l.getLongitude(); }
-        if (liveMap == null || l == null) return;
-        float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0;
-        parkGpsKmh = kmh;
-        liveMap.setPosition(l.getLatitude(), l.getLongitude(), l.hasBearing() && kmh > 4 ? l.getBearing() : Float.NaN, kmh);
-        liveMap.setVisibility(View.VISIBLE);
-        updateMapTag();
-    }
-    private void updateMapTag() {
-        if (mapTagTv == null) return;
-        boolean live = lastFix > 0;
-        if (liveMap == null || !liveMap.hasFix()) mapTagTv.setText("Buscando GPS…");
-        else if (liveMap.offline()) mapTagTv.setText(live ? "En vivo · sin internet" : "Última posición · sin internet");
-        else mapTagTv.setText(live ? "Mapa en vivo" : "Última posición conocida");
     }
 
     private void buildAudioCard() {
@@ -2857,6 +2813,8 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         public void onLocationChanged(Location l) {
             lastFix = SystemClock.elapsedRealtime();
             if (l != null) {
+                wLat = l.getLatitude();
+                wLon = l.getLongitude();
                 // Fallback de odómetro por GPS cuando OBD2 está desconectado.
                 try {
                     boolean obdOn = getObdRepo().isConnected();
@@ -2868,16 +2826,17 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
                 } catch (Throwable ignored) {}
             }
             setGps(true, l.hasSpeed() ? l.getSpeed() * 3.6f : 0);
-            feedMap(l);
         }
         public void onStatusChanged(String p, int st, Bundle e) { }
         public void onProviderEnabled(String p) { }
         public void onProviderDisabled(String p) { setGps(false, 0); }
     };
 
-    /** Ubicación por red (WiFi/datos): solo para ubicar el mapa mientras llega el GPS. */
+    /** Ubicación por red (WiFi/datos): solo para el clima mientras llega el GPS. */
     private final LocationListener netListener = new LocationListener() {
-        public void onLocationChanged(Location l) { if (lastFix == 0) feedMap(l); }
+        public void onLocationChanged(Location l) {
+            if (l != null && lastFix == 0) { wLat = l.getLatitude(); wLon = l.getLongitude(); }
+        }
         public void onStatusChanged(String p, int st, Bundle e) { }
         public void onProviderEnabled(String p) { }
         public void onProviderDisabled(String p) { }
@@ -2904,7 +2863,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         speedTv.setText(ok ? String.valueOf(Math.round(kmh < 2 ? 0 : kmh)) : "--");
         gpsTv.setText(ok ? "GPS" : "Buscando GPS");
         gpsDot.setBackground(round(ok ? 0xFF3DDC84 : MUTED, 4));
-        updateMapTag();
     }
 
     private View.OnClickListener mediaClick(final int code) {
@@ -3273,7 +3231,6 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
                 public void onClick(DialogInterface d, int w) {
                     prefs.edit().putString(key, et.getText().toString().trim()).apply();
                     if ("city_manual".equals(key)) refreshWeatherNow();
-                    if ("map_url".equals(key)) toast("Se aplicará al reiniciar Ford Launcher");
                     if ("extra_actions".equals(key)) {
                         try { nowPlaying.stop(); nowPlaying.start(); } catch (Throwable ignored) { }
                     }
@@ -3822,7 +3779,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
 
     interface IntCb { void on(int i); }
 
-    static final String[] CAT_NAMES = {"Volver al inicio", "Tu vehículo", "Apariencia", "Conexión", "Accesos y apps", "Mapa y clima", "Música", "Sistema", "Ajustes IA", "Acerca de"};
+    static final String[] CAT_NAMES = {"Volver al inicio", "Tu vehículo", "Apariencia", "Conexión", "Accesos y apps", "Clima", "Música", "Sistema", "Ajustes IA", "Acerca de"};
     static final String[] CAT_ICONS = {"arrow_back", "directions_car", "palette", "usb", "apps", "map", "music_note", "tune", "android", "info"};
 
     private void closeSettings() {
@@ -4305,16 +4262,27 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         String manual = prefs.getString("city_manual", "");
         row(w, "Ciudad", "Vacío = automática por GPS", manual.length() > 0 ? manual : (weatherNow != null && weatherNow.city != null ? weatherNow.city + " (GPS)" : "Automática"),
             edit("city_manual", "Ciudad (vacío = automática por GPS)", ""));
-        LinearLayout m = section(body, "Mapa");
-        segmented(m, "Brillo del mapa", "Solo en modo oscuro", new String[]{"Bajo", "Medio", "Alto"}, prefs.getInt("map_bright", 1), new IntCb() { public void on(int i) {
-            prefs.edit().putInt("map_bright", i).apply(); rebuild();
-        }});
-        row(m, "Diagnóstico del mapa", "Fuentes probadas y errores", null, new Runnable() { public void run() {
-            new AlertDialog.Builder(Main.this, dlg()).setTitle("Diagnóstico del mapa")
-                .setMessage(liveMap != null ? liveMap.diag() : "Mapa no disponible").setPositiveButton("OK", null).show();
-        }});
-        row(m, "Fuente del mapa (avanzado)", "URL propia con {z}/{x}/{y}", prefs.getString("map_url", "").length() > 0 ? "Personalizada" : "Automática",
-            edit("map_url", "URL de teselas {z}/{x}/{y} (vacío = automático)", ""));
+
+        LinearLayout n = section(body, "Navegación");
+        segmented(n, "App de navegación", "Se abre desde el card y desde los comandos de voz",
+                new String[]{"Waze", "Google Maps"},
+                "maps".equals(prefs.getString("nav_app", "waze")) ? 1 : 0, new IntCb() { public void on(int i) {
+                    prefs.edit().putString("nav_app", i == 1 ? "maps" : "waze").apply();
+                    showSettings(5);
+                    if (navCard != null) navCard.refresh();
+                }});
+        String home = prefs.getString("nav_home", "");
+        row(n, "Dirección de casa", "Acceso rápido del card", home.length() > 0 ? home : "No configurada",
+                edit("nav_home", "Dirección de casa (vacío = buscar «casa»)", ""));
+        String work = prefs.getString("nav_work", "");
+        row(n, "Dirección del trabajo", "Acceso rápido del card", work.length() > 0 ? work : "No configurada",
+                edit("nav_work", "Dirección del trabajo (vacío = buscar «trabajo»)", ""));
+        row(n, "Acceso a notificaciones", "Necesario para ver giros, metros y ETA en el card",
+                com.fordlauncher.launcher.nav.NavigationNotificationListener.isEnabled(this) ? "Activado" : "Desactivado",
+                new Runnable() { public void run() {
+                    try { startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+                    catch (Throwable e) { toast("No se pudo abrir el ajuste"); }
+                }});
     }
 
     private void catMusic(LinearLayout body) {
@@ -4405,7 +4373,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (!android.os.Build.VERSION.RELEASE.startsWith(androidName(SDK).split(" ")[0]))
             b.append("Ojo: la pantalla dice Android ").append(android.os.Build.VERSION.RELEASE).append(", pero por dentro es ").append(androidName(SDK)).append(".\n");
         b.append("\n");
-        compatLine(b, "Inicio, mapa, clima, velocímetro", "Android 4.1+", true, null);
+        compatLine(b, "Inicio, clima, velocímetro", "Android 4.1+", true, null);
         compatLine(b, "Pista y carátula por Bluetooth", "Android 4.1+", true, clwBt ? "app Bluetooth de fábrica detectada" : "depende de la marca");
         compatLine(b, "Botón ▶ del inicio pasa el sonido a Bluetooth", "Pantallas Clinkway / Autochips", clwBt, clwBt ? "funciona aunque vengas de la radio" : "en otras marcas: «Abrir la app de música Bluetooth al conectar»");
         compatLine(b, "Pasar a Bluetooth al dar play en el celular (en prueba)", "Pantallas Clinkway / Autochips", clwBt, clwBt ? (btAutoOn() ? "activado" : "desactivado; en algunas pantallas no detecta el play del celular") : null);
@@ -4414,7 +4382,10 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         compatLine(b, "Android Auto con Open Headunit", "Android 4.1+ · cable USB", true, installed(PKG_HUR) ? "Open Headunit instalado" : "falta instalar Open Headunit");
         compatLine(b, "Android Auto / CarPlay de la pantalla", "Si la pantalla lo trae", nativeProjectionApp() != null, nativeProjectionApp() != null ? labelOf(nativeProjectionApp()) : "no detectado");
         compatLine(b, "CarPlay", "Pantalla con CarPlay o adaptador USB", carPlayApp() != null, carPlayApp() != null ? labelOf(carPlayApp()) : "no detectado");
-        compatLine(b, "Mapa con internet seguro (TLS 1.2)", "Android 4.1+ (Ford Launcher lo activa)", true, SDK < 20 ? "en Android 4.x solo algunos servidores de mapas responden" : null);
+        compatLine(b, "Navegación con giros en vivo (Waze/Maps)", "Android 4.1+ · acceso a notificaciones (API 18+)", SDK >= 18,
+                SDK >= 18 ? (com.fordlauncher.launcher.nav.NavigationNotificationListener.isEnabled(this)
+                        ? "activada" : "falta dar acceso a notificaciones")
+                        : "no disponible en Android " + androidName(SDK));
         compatLine(b, "Instalar actualizaciones desde la app", "Android 4.1+", true, SDK >= 26 ? "pide permiso «Instalar apps desconocidas»" : null);
         new AlertDialog.Builder(this, dlg()).setTitle("Compatibilidad").setMessage(b.toString().trim()).setPositiveButton("OK", null).show();
     }

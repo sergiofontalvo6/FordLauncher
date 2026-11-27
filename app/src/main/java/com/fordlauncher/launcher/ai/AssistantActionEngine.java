@@ -3,6 +3,7 @@ package com.fordlauncher.launcher.ai;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.media.AudioManager;
 import android.provider.Settings;
@@ -583,19 +584,86 @@ public final class AssistantActionEngine {
         return true;
     }
 
-    /** Navegación: lanza la app de maps/Waze directamente desde el contexto del host. */
+    /** Navegación local: TTS inmediato y ruta directa en la app elegida (Waze o Maps). */
     private boolean ejecutarNavegacionLocal(String n) {
         boolean navegar = n.startsWith("navega") || n.contains("navegacion") || n.contains("guiame")
                 || n.contains("lle name") || n.contains("llevame") || n.contains("waze")
                 || n.contains("google maps") || n.contains("maps");
         if (!navegar) return false;
-        String app = n.contains("waze") ? "Waze" : (n.contains("maps") ? "Google Maps" : "Waze");
-        boolean ok = false;
-        try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, app); } catch (Throwable ignored) {}
-        String decir = ok ? "Abriendo navegación." : "No encontré la app de navegación.";
+
+        String destino = extraerDestinoNavegacion(n);
+        android.content.SharedPreferences sp = ctx.getSharedPreferences(
+                "launcher", android.content.Context.MODE_PRIVATE);
+        boolean maps = "maps".equals(sp.getString("nav_app", "waze"));
+        String appNombre = maps ? "Google Maps" : "Waze";
+        String pkg = maps ? "com.google.android.apps.maps" : "com.waze";
+        if (esCasa(destino)) destino = sp.getString("nav_home", "casa");
+        else if (esTrabajo(destino)) destino = sp.getString("nav_work", "trabajo");
+
+        String decir = destino.length() > 0
+                ? "Iniciando ruta hacia " + destino
+                : "Abriendo " + appNombre + ".";
         host.showText(decir);
         host.speak(decir, false);
+
+        boolean ok = false;
+        try {
+            Uri uri;
+            if (destino.length() == 0) {
+                uri = maps ? Uri.parse("geo:0,0") : Uri.parse("https://waze.com/ul");
+            } else if (maps) {
+                uri = Uri.parse("google.navigation:q=" + Uri.encode(destino) + "&mode=d");
+            } else {
+                uri = Uri.parse("https://waze.com/ul?q=" + Uri.encode(destino) + "&navigate=yes");
+            }
+            Intent i = new Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            ctx.startActivity(i);
+            ok = true;
+        } catch (Throwable t) {
+            try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, appNombre); } catch (Throwable ignored) { }
+        }
+        if (!ok) {
+            decir = "No encontré la app de navegación.";
+            host.showText(decir);
+            host.speak(decir, false);
+        }
         return true;
+    }
+
+    private static boolean esCasa(String d) {
+        if (d == null) return false;
+        String s = d.toLowerCase(java.util.Locale.ROOT);
+        return s.equals("casa") || s.equals("mi casa") || s.equals("hogar") || s.equals("mi hogar");
+    }
+
+    private static boolean esTrabajo(String d) {
+        if (d == null) return false;
+        String s = d.toLowerCase(java.util.Locale.ROOT);
+        return s.equals("trabajo") || s.equals("mi trabajo") || s.equals("oficina") || s.equals("mi oficina");
+    }
+
+    /** Extrae el destino de frases como «llevame al aeropuerto el dorado». */
+    private static String extraerDestinoNavegacion(String n) {
+        if (n == null) return "";
+        String s = n.trim();
+        String[] prefijos = {
+                "llevame a la ", "llevame ala ", "llevame al ", "llevame a ",
+                "navegacion hacia ", "navegacion a ", "navega hacia ", "navega al ", "navega a ",
+                "guiame hacia ", "guiame al ", "guiame a ", "guia a ", "guia al ",
+                "ruta hacia ", "ruta a ", "waze al ", "waze a ",
+                "google maps a ", "maps al ", "maps a ",
+                "ir al ", "ir a ", "vamos al ", "vamos a "
+        };
+        for (String p : prefijos) {
+            if (s.startsWith(p)) { s = s.substring(p.length()).trim(); break; }
+        }
+        s = s.replaceFirst("^(navega|navegar|navegacion|guia|guiame|llevame|waze|google maps|maps)\\s+", "").trim();
+        s = s.replaceFirst("^(a|al|hacia|a la|ala)\\s+", "").trim();
+        s = s.replaceFirst("^(la|el|las|los)\\s+", "").trim();
+        s = s.replaceAll("\\s+(por favor|en waze|en maps|por waze)$", "").trim();
+        if (s.matches("(waze|maps|google maps|navegacion|navegador)")) return "";
+        return s;
     }
 
     /**
