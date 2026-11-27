@@ -16,8 +16,8 @@ android {
         minSdk 16
         // 28 a propósito: mantiene el comportamiento probado en pantallas viejas y nuevas.
         targetSdk 28
-        versionCode 57
-        versionName '2.10.24'
+        versionCode 58
+        versionName '2.10.25'
     }
 
     signingConfigs {

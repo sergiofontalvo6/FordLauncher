@@ -35,6 +35,7 @@ public final class NavigationCardHost implements NavState.Listener {
     private ImageView arrow;
     private TextView distanceTv, maneuverTv, etaTv, appTv, openTv;
     private Bitmap icon;
+    private String routePkg, lastDistance, lastManeuver;
 
     public NavigationCardHost(Activity activity, FrameLayout card) {
         this.activity = activity;
@@ -54,6 +55,9 @@ public final class NavigationCardHost implements NavState.Listener {
     public void release() {
         NavState.removeListener(this);
         icon = null;
+        routePkg = null;
+        lastDistance = null;
+        lastManeuver = null;
     }
 
     /** El HOME vuelve al frente: el card ya refleja el estado, solo se redibuja. */
@@ -78,10 +82,18 @@ public final class NavigationCardHost implements NavState.Listener {
     private void render(NavState.Data d) {
         if (idle == null || route == null) return;
         if (d == null) {
+            routePkg = null;
+            lastDistance = null;
+            lastManeuver = null;
             idle.setVisibility(View.VISIBLE);
             route.setVisibility(View.GONE);
             return;
         }
+        if (!d.pkg.equals(routePkg)) {
+            lastDistance = null;
+            lastManeuver = null;
+        }
+        routePkg = d.pkg;
         idle.setVisibility(View.GONE);
         route.setVisibility(View.VISIBLE);
 
@@ -93,7 +105,13 @@ public final class NavigationCardHost implements NavState.Listener {
             dist = man;
             man = t;
         }
-        appTv.setText(appLabel() + " · turn-by-turn");
+        // Maps publica actualizaciones sin el campo de distancia: conservar la
+        // última maniobra conocida evita que el card vuelva a «Ruta activa».
+        if (dist.length() == 0) dist = lastDistance == null ? "" : lastDistance;
+        else lastDistance = dist;
+        if (man.length() == 0) man = lastManeuver == null ? "" : lastManeuver;
+        else lastManeuver = man;
+        appTv.setText(appLabelFor(routePkg) + " · turn-by-turn");
         distanceTv.setText(dist.length() > 0 ? dist : "Ruta activa");
         maneuverTv.setText(man.length() > 0 ? man : "Navegando");
         etaTv.setText(eta.length() > 0 ? eta : "");
@@ -253,8 +271,10 @@ public final class NavigationCardHost implements NavState.Listener {
     }
 
     private void bringToFront() {
-        String pkg = "maps".equals(prefs.getString("nav_app", "waze"))
-                ? "com.google.android.apps.maps" : "com.waze";
+        // Si hay ruta, traer al frente la app que la está publicando, no la preferida.
+        String pkg = routePkg != null ? routePkg
+                : ("maps".equals(prefs.getString("nav_app", "waze"))
+                ? "com.google.android.apps.maps" : "com.waze");
         try {
             Intent i = activity.getPackageManager().getLaunchIntentForPackage(pkg);
             if (i != null) {
@@ -266,6 +286,13 @@ public final class NavigationCardHost implements NavState.Listener {
 
     private String appLabel() {
         return "maps".equals(prefs.getString("nav_app", "waze")) ? "Google Maps" : "Waze";
+    }
+
+    /** Etiqueta de la app que realmente envía la ruta (puede diferir de la preferida). */
+    private String appLabelFor(String pkg) {
+        if ("com.google.android.apps.maps".equals(pkg)) return "Google Maps";
+        if ("com.waze".equals(pkg)) return "Waze";
+        return appLabel();
     }
 
     private float scale() {
