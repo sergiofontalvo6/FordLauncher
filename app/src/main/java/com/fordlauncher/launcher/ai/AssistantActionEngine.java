@@ -14,6 +14,7 @@ import android.util.Log;
 import com.fordlauncher.launcher.DiagnosticoView;
 import com.fordlauncher.launcher.Main;
 import com.fordlauncher.launcher.Net;
+import com.fordlauncher.launcher.nav.NavigationLauncher;
 import com.fordlauncher.launcher.obd.GeminiDiagnosticClient;
 import com.fordlauncher.launcher.obd.ObdRepository;
 import com.fordlauncher.launcher.obd.Pids;
@@ -594,33 +595,23 @@ public final class AssistantActionEngine {
         String destino = extraerDestinoNavegacion(n);
         android.content.SharedPreferences sp = ctx.getSharedPreferences(
                 "launcher", android.content.Context.MODE_PRIVATE);
-        boolean maps = "maps".equals(sp.getString("nav_app", "waze"));
+        // "Mini mapa / PiP / ventanita" fuerza Google Maps: es la única app que
+        // deja la ventana flotante sobre el lado derecho del card del HOME.
+        boolean pip = n.contains("pip") || n.contains("miniatura") || n.contains("ventanita")
+                || n.contains("mini mapa") || n.contains("minimapa");
+        boolean maps = pip || NavigationLauncher.isMaps(ctx);
         String appNombre = maps ? "Google Maps" : "Waze";
-        String pkg = maps ? "com.google.android.apps.maps" : "com.waze";
         if (esCasa(destino)) destino = sp.getString("nav_home", "casa");
         else if (esTrabajo(destino)) destino = sp.getString("nav_work", "trabajo");
 
         String decir = destino.length() > 0
-                ? "Iniciando ruta hacia " + destino
+                ? "Iniciando ruta hacia " + destino + (pip ? " con mini mapa flotante" : "")
                 : "Abriendo " + appNombre + ".";
         host.showText(decir);
         host.speak(decir, false);
 
-        boolean ok = false;
-        try {
-            Uri uri;
-            if (destino.length() == 0) {
-                uri = maps ? Uri.parse("geo:0,0") : Uri.parse("https://waze.com/ul");
-            } else if (maps) {
-                uri = Uri.parse("google.navigation:q=" + Uri.encode(destino) + "&mode=d");
-            } else {
-                uri = Uri.parse("https://waze.com/ul?q=" + Uri.encode(destino) + "&navigate=yes");
-            }
-            Intent i = new Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            ctx.startActivity(i);
-            ok = true;
-        } catch (Throwable t) {
+        boolean ok = NavigationLauncher.open(ctx, destino, maps);
+        if (!ok) {
             try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, appNombre); } catch (Throwable ignored) { }
         }
         if (!ok) {

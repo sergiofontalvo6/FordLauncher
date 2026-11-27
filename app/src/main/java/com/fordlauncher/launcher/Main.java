@@ -4277,6 +4277,9 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         String work = prefs.getString("nav_work", "");
         row(n, "Dirección del trabajo", "Acceso rápido del card", work.length() > 0 ? work : "No configurada",
                 edit("nav_work", "Dirección del trabajo (vacío = buscar «trabajo»)", ""));
+        row(n, "Mini mapa flotante (PiP)",
+                "Google Maps: arrastra su ventana flotante al hueco derecho del card. Waze: turn-by-turn en segundo plano, sin PiP.",
+                null, null);
         row(n, "Acceso a notificaciones", "Necesario para ver giros, metros y ETA en el card",
                 com.fordlauncher.launcher.nav.NavigationNotificationListener.isEnabled(this) ? "Activado" : "Desactivado",
                 new Runnable() { public void run() {

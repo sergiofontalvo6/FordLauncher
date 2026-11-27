@@ -108,7 +108,8 @@ public class DebugCommandReceiver extends BroadcastReceiver {
                 cv.drawCircle(32, 32, 28, p);
                 com.fordlauncher.launcher.nav.NavState.publish(
                         new com.fordlauncher.launcher.nav.NavState.Data("com.waze", "250 m",
-                                "Gira a la derecha hacia Av. Boyacá", "12 min · 5,4 km", bmp));
+                                "en dirección a Carretera 50 Bogotá-Llanogrande vía Aeropuerto El Dorado",
+                                "12 min · 5,4 km · Llegada: 11:57 a. m.", bmp));
                 android.util.Log.i("FordLauncher/NavNotif", "navtest: ruta simulada publicada");
             }
             return;

@@ -41,6 +41,9 @@ public final class NavState {
 
     public static Data get() { return current; }
 
+    /** true mientras Waze/Maps estén publicando una ruta (turn-by-turn activo). */
+    public static boolean isActive() { return current != null; }
+
     public static void publish(Data data) {
         current = data;
         for (Listener l : LISTENERS) {

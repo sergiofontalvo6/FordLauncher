@@ -2,14 +2,14 @@ package com.fordlauncher.launcher;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
-import android.net.Uri;
+import android.graphics.drawable.GradientDrawable;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -18,11 +18,15 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.fordlauncher.launcher.nav.NavState;
+import com.fordlauncher.launcher.nav.NavigationLauncher;
+
+import java.util.Locale;
 
 /**
  * Tarjeta de navegación del HOME. Sin ruta ofrece Waze / Maps y accesos rápidos;
- * con ruta activa muestra la maniobra que publisha el lector de notificaciones.
- * No crea ventanas flotantes ni servicios propios.
+ * con ruta activa muestra el turn-by-turn de la notificación en la mitad
+ * izquierda y reserva la derecha para la miniatura PiP de Google Maps.
+ * No crea ventanas flotantes ni servicios propios: el PiP lo dibuja el sistema.
  */
 public final class NavigationCardHost implements NavState.Listener {
 
@@ -33,7 +37,8 @@ public final class NavigationCardHost implements NavState.Listener {
     private View idle;
     private View route;
     private ImageView arrow;
-    private TextView distanceTv, maneuverTv, etaTv, appTv, openTv;
+    private TextView distanceTv, maneuverTv, etaTv, appTv, openTv, pipHint;
+    private LinearLayout pipDock;
     private Bitmap icon;
     private String routePkg, lastDistance, lastManeuver;
 
@@ -66,7 +71,7 @@ public final class NavigationCardHost implements NavState.Listener {
     public void refresh() {
         activity.runOnUiThread(new Runnable() {
             public void run() {
-                if (openTv != null) openTv.setText("Abrir " + appLabel());
+                if (openTv != null) openTv.setText("Abrir " + NavigationLauncher.appLabel(activity));
                 render(NavState.get());
             }
         });
@@ -81,7 +86,7 @@ public final class NavigationCardHost implements NavState.Listener {
 
     private void render(NavState.Data d) {
         if (idle == null || route == null) return;
-        if (d == null) {
+        if (!NavState.isActive() || d == null) {
             routePkg = null;
             lastDistance = null;
             lastManeuver = null;
@@ -111,10 +116,14 @@ public final class NavigationCardHost implements NavState.Listener {
         else lastDistance = dist;
         if (man.length() == 0) man = lastManeuver == null ? "" : lastManeuver;
         else lastManeuver = man;
-        appTv.setText(appLabelFor(routePkg) + " · turn-by-turn");
-        distanceTv.setText(dist.length() > 0 ? dist : "Ruta activa");
-        maneuverTv.setText(man.length() > 0 ? man : "Navegando");
+
+        String etiqueta = NavigationLauncher.appLabelFor(routePkg);
+        if (etiqueta == null) etiqueta = NavigationLauncher.appLabel(activity);
+        appTv.setText(etiqueta + " · turn-by-turn");
+        distanceTv.setText(formatoDistancia(dist.length() > 0 ? dist : "Ruta activa"));
+        maneuverTv.setText(nombreCalle(man.length() > 0 ? man : "Navegando"));
         etaTv.setText(eta.length() > 0 ? eta : "");
+        pipHint.setText(NavigationLauncher.wantsPip(routePkg) ? "Mapa PiP" : "Waze · segundo plano");
 
         if (d.icon != null) icon = d.icon;
         if (icon != null && !icon.isRecycled()) arrow.setImageBitmap(icon);
@@ -131,6 +140,24 @@ public final class NavigationCardHost implements NavState.Listener {
         return true;
     }
 
+    /** "1.4 km" → "1,4 km" para que coincida con el formato del card en español. */
+    private static String formatoDistancia(String s) {
+        return s == null ? "" : s.trim().replace('.', ',');
+    }
+
+    /** Quita el prefijo de la notificación para que la calle ocupe solo 2 líneas. */
+    private static String nombreCalle(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        String lower = t.toLowerCase(Locale.ROOT);
+        String[] prefijos = {"en dirección a ", "en direccion a ", "hacia ",
+                "gire a la derecha en ", "gire a la izquierda en ", "continue en "};
+        for (String p : prefijos) {
+            if (lower.startsWith(p)) return t.substring(p.length()).trim();
+        }
+        return t;
+    }
+
     private View buildIdle() {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -141,7 +168,7 @@ public final class NavigationCardHost implements NavState.Listener {
         title.setGravity(Gravity.CENTER);
         root.addView(title);
 
-        openTv = text("Abrir " + appLabel(), 18, Color.WHITE, true);
+        openTv = text("Abrir " + NavigationLauncher.appLabel(activity), 18, Color.WHITE, true);
         openTv.setGravity(Gravity.CENTER);
         openTv.setBackground(new PlainRound(0xFFC62828, 12 * scale()));
         openTv.setPadding((int) (12 * scale()), (int) (10 * scale()),
@@ -151,7 +178,7 @@ public final class NavigationCardHost implements NavState.Listener {
         bp.topMargin = (int) (18 * scale());
         root.addView(openTv, bp);
         openTv.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openNavigation(""); }
+            public void onClick(View v) { NavigationLauncher.open(activity, ""); }
         });
 
         LinearLayout row = new LinearLayout(activity);
@@ -195,105 +222,93 @@ public final class NavigationCardHost implements NavState.Listener {
         row.addView(b, lp);
     }
 
+    /** Card con ruta: 52% maniobra y ETA / 48% hueco para el PiP de Maps. */
     private View buildRoute() {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding((int) (18 * scale()), (int) (44 * scale()),
-                (int) (18 * scale()), (int) (16 * scale()));
+        root.setPadding((int) (12 * scale()), (int) (26 * scale()),
+                (int) (12 * scale()), (int) (12 * scale()));
 
-        appTv = text("", 12, 0xB3FFFFFF, true);
-        root.addView(appTv);
+        LinearLayout split = new LinearLayout(activity);
+        split.setOrientation(LinearLayout.HORIZONTAL);
+        split.addView(buildTurnSide(), new LinearLayout.LayoutParams(0, -1, 0.52f));
 
-        LinearLayout main = new LinearLayout(activity);
-        main.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, -2);
-        mp.topMargin = (int) (20 * scale());
+        pipDock = new LinearLayout(activity);
+        pipDock.setOrientation(LinearLayout.VERTICAL);
+        pipDock.setGravity(Gravity.CENTER);
+        GradientDrawable frame = new GradientDrawable();
+        frame.setShape(GradientDrawable.RECTANGLE);
+        frame.setCornerRadius(12 * scale());
+        frame.setColor(0x0AFFFFFF);
+        frame.setStroke(Math.max(1, (int) (2 * scale())), 0x55FFFFFF);
+        pipDock.setBackground(frame);
+        pipHint = text("Mapa PiP", 11, 0x99FFFFFF, true);
+        pipHint.setGravity(Gravity.CENTER);
+        pipDock.addView(pipHint);
+        LinearLayout.LayoutParams dockLp = new LinearLayout.LayoutParams(0, -1, 0.48f);
+        dockLp.leftMargin = (int) (8 * scale());
+        split.addView(pipDock, dockLp);
 
-        arrow = new ImageView(activity);
-        arrow.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        main.addView(arrow, new LinearLayout.LayoutParams(
-                (int) (76 * scale()), (int) (76 * scale())));
-
-        LinearLayout col = new LinearLayout(activity);
-        col.setOrientation(LinearLayout.VERTICAL);
-        distanceTv = text("—", 28, Color.WHITE, true);
-        maneuverTv = text("Ruta activa", 14, Color.WHITE, false);
-        col.addView(distanceTv);
-        LinearLayout.LayoutParams mnp = new LinearLayout.LayoutParams(-1, -2);
-        mnp.topMargin = (int) (6 * scale());
-        col.addView(maneuverTv, mnp);
-        main.addView(col, new LinearLayout.LayoutParams(-1, -2));
-        root.addView(main, mp);
-
-        etaTv = text("", 13, 0xB3FFFFFF, false);
-        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, -2);
-        ep.topMargin = (int) (20 * scale());
-        root.addView(etaTv, ep);
-
+        LinearLayout.LayoutParams splitLp = new LinearLayout.LayoutParams(-1, -1);
+        root.addView(split, splitLp);
         root.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { bringToFront(); }
+        });
+        pipDock.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { bringToFront(); }
         });
         return root;
     }
 
+    /** Mitad izquierda: app, flecha, distancia grande, calle en 2 líneas y ETA. */
+    private LinearLayout buildTurnSide() {
+        LinearLayout left = new LinearLayout(activity);
+        left.setOrientation(LinearLayout.VERTICAL);
+
+        appTv = text("", 11, 0xB3FFFFFF, true);
+        left.addView(appTv);
+
+        LinearLayout main = new LinearLayout(activity);
+        main.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, -2);
+        mp.topMargin = (int) (14 * scale());
+
+        arrow = new ImageView(activity);
+        arrow.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        main.addView(arrow, new LinearLayout.LayoutParams(
+                (int) (58 * scale()), (int) (58 * scale())));
+
+        LinearLayout col = new LinearLayout(activity);
+        col.setOrientation(LinearLayout.VERTICAL);
+        distanceTv = text("—", 26, Color.WHITE, true);
+        maneuverTv = text("Ruta activa", 13, Color.WHITE, false);
+        maneuverTv.setMaxLines(2);
+        maneuverTv.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(distanceTv);
+        LinearLayout.LayoutParams mnp = new LinearLayout.LayoutParams(-1, -2);
+        mnp.topMargin = (int) (4 * scale());
+        col.addView(maneuverTv, mnp);
+        main.addView(col, new LinearLayout.LayoutParams(-1, -2));
+        left.addView(main, mp);
+
+        etaTv = text("", 12, 0xB3FFFFFF, false);
+        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, -2);
+        ep.topMargin = (int) (14 * scale());
+        left.addView(etaTv, ep);
+        return left;
+    }
+
     private void openHome() {
         String d = prefs.getString("nav_home", "");
-        openNavigation(d.length() > 0 ? d : "casa");
+        NavigationLauncher.open(activity, d.length() > 0 ? d : "casa");
     }
 
     private void openWork() {
         String d = prefs.getString("nav_work", "");
-        openNavigation(d.length() > 0 ? d : "trabajo");
+        NavigationLauncher.open(activity, d.length() > 0 ? d : "trabajo");
     }
 
-    /** Abre la app elegida en Ajustes → Mapa y clima; con destino, arranca la ruta. */
-    private void openNavigation(String destino) {
-        boolean maps = "maps".equals(prefs.getString("nav_app", "waze"));
-        String pkg = maps ? "com.google.android.apps.maps" : "com.waze";
-        try {
-            Uri uri;
-            if (destino == null || destino.length() == 0) {
-                uri = maps ? Uri.parse("geo:0,0") : Uri.parse("https://waze.com/ul");
-            } else if (maps) {
-                uri = Uri.parse("google.navigation:q=" + Uri.encode(destino) + "&mode=d");
-            } else {
-                uri = Uri.parse("https://waze.com/ul?q=" + Uri.encode(destino) + "&navigate=yes");
-            }
-            Intent i = new Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            activity.startActivity(i);
-        } catch (Throwable t) {
-            try {
-                Intent launch = activity.getPackageManager().getLaunchIntentForPackage(pkg);
-                if (launch != null) activity.startActivity(launch);
-            } catch (Throwable ignored) { }
-        }
-    }
-
-    private void bringToFront() {
-        // Si hay ruta, traer al frente la app que la está publicando, no la preferida.
-        String pkg = routePkg != null ? routePkg
-                : ("maps".equals(prefs.getString("nav_app", "waze"))
-                ? "com.google.android.apps.maps" : "com.waze");
-        try {
-            Intent i = activity.getPackageManager().getLaunchIntentForPackage(pkg);
-            if (i != null) {
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                activity.startActivity(i);
-            }
-        } catch (Throwable ignored) { }
-    }
-
-    private String appLabel() {
-        return "maps".equals(prefs.getString("nav_app", "waze")) ? "Google Maps" : "Waze";
-    }
-
-    /** Etiqueta de la app que realmente envía la ruta (puede diferir de la preferida). */
-    private String appLabelFor(String pkg) {
-        if ("com.google.android.apps.maps".equals(pkg)) return "Google Maps";
-        if ("com.waze".equals(pkg)) return "Waze";
-        return appLabel();
-    }
+    private void bringToFront() { NavigationLauncher.bringToFront(activity, routePkg); }
 
     private float scale() {
         return card.getWidth() > 0 ? card.getWidth() / 431f : 1.2f;
@@ -323,9 +338,7 @@ public final class NavigationCardHost implements NavState.Listener {
         }
 
         @Override public void setAlpha(int a) { paint.setAlpha(a); }
-
         @Override public void setColorFilter(android.graphics.ColorFilter cf) { paint.setColorFilter(cf); }
-
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
@@ -354,9 +367,7 @@ public final class NavigationCardHost implements NavState.Listener {
         }
 
         @Override public void setAlpha(int a) { paint.setAlpha(a); }
-
         @Override public void setColorFilter(android.graphics.ColorFilter cf) { paint.setColorFilter(cf); }
-
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 }
