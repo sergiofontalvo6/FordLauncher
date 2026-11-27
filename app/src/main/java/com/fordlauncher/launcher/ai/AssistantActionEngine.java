@@ -3,6 +3,9 @@ package com.fordlauncher.launcher.ai;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
+import android.media.AudioManager;
+import android.provider.Settings;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -67,14 +70,24 @@ public final class AssistantActionEngine {
     /** Flujo completo: comandos locales -> estado OBD -> Gemini -> ejecutar acción. */
     public void ask(final String pregunta) {
         if (pregunta == null || pregunta.trim().length() == 0) { host.setIdle(); return; }
+        LatencyTrace.asegurarTurno("ASK");
         // Los comandos locales SIEMPRE van antes de mirar la red o llamar a Gemini.
-        try { if (ejecutarComandoLocal(pregunta)) return; } catch (Throwable ignored) {}
+        try {
+            if (ejecutarComandoLocal(pregunta)) {
+                LatencyTrace.iaFin(true);
+                return;
+            }
+        } catch (Throwable ignored) {}
 
         boolean sinRed = !Net.isNetworkAvailable(ctx);
         boolean requiereVehiculoOffline = sinRed && VehicleIntent.requiereVehiculo(pregunta);
         if (sinRed) {
-            if (requiereVehiculoOffline && responderSensoresLocal(pregunta)) return;
+            if (requiereVehiculoOffline && responderSensoresLocal(pregunta)) {
+                LatencyTrace.iaFin(true);
+                return;
+            }
             if (!requiereVehiculoOffline) {
+                LatencyTrace.iaFin(true);
                 Log.i(TAG, "Sin red -> respuesta local, Gemini no invocado: " + MSG_SIN_INTERNET);
                 host.showText(MSG_SIN_INTERNET);
                 host.speak(MSG_SIN_INTERNET, true);
@@ -94,13 +107,20 @@ public final class AssistantActionEngine {
             }
         } catch (Throwable ignored) {}
 
+        // Diagnóstico rápido: los sensores ya leídos se responden en el equipo.
+        if (requiereVehiculo && responderSensoresLocal(pregunta)) {
+            LatencyTrace.iaFin(true);
+            return;
+        }
         if (requiereVehiculo && !conectado) {
+            LatencyTrace.iaFin(true);
             final String aviso = "Sergio, el adaptador OBD2 no está conectado. Por favor conéctalo para poder leer los sensores del Fiesta.";
             host.showText(aviso);
             host.speak(aviso, true);
             return;
         }
         if (sinRed && requiereVehiculoOffline) {
+            LatencyTrace.iaFin(true);
             final String aviso = "Sergio, sin conexión solo puedo leer los sensores disponibles del vehículo.";
             host.showText(aviso);
             host.speak(aviso, true);
@@ -111,8 +131,10 @@ public final class AssistantActionEngine {
         final String snap = snapshot();
         host.notifyUser("Consultando…");
         host.setWaiting();
+        LatencyTrace.iaInicio(GeminiDiagnosticClient.MODEL_VOZ);
         GeminiDiagnosticClient.analyze(ctx, snap, task, false, new GeminiDiagnosticClient.Callback() {
             public void onDone(final String text, final String error) {
+                LatencyTrace.iaFin(false);
                 main.post(new Runnable() {
                     public void run() { procesarRespuestaGemini(text, error, pregunta); }
                 });
@@ -352,6 +374,12 @@ public final class AssistantActionEngine {
         if (t.length() == 0) return false;
         String rawLower = raw.trim().toLowerCase(Locale.ROOT);
 
+        // 0a) Acciones del vehículo que no deben esperar a la nube.
+        if (ejecutarVolumenLocal(t)) return true;
+        if (ejecutarBrilloLocal(t)) return true;
+        if (ejecutarNavegacionLocal(t)) return true;
+        if (ejecutarMusicaGenericaLocal(t)) return true;
+
         // 0) Volver al home real antes que cualquier otra interpretación.
         if (esPedidoDeHome(t)) {
             ejecutarGoHome(null, "Volviendo al inicio");
@@ -473,6 +501,95 @@ public final class AssistantActionEngine {
                 return true;
             }
         }
+        return false;
+    }
+
+    /** Volumen: se resuelve en el equipo, sin ida y vuelta a Gemini. */
+    private boolean ejecutarVolumenLocal(String n) {
+        boolean pedir = n.contains("volumen") || n.contains("sube el sonido") || n.contains("baja el sonido")
+                || n.contains("mas alto") || n.contains("mas bajo") || n.contains("silencia")
+                || n.contains("silenciar") || n.contains("mute") || n.contains("calla");
+        if (!pedir) return false;
+        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return false;
+        int stream = AudioManager.STREAM_MUSIC;
+        int max = am.getStreamMaxVolume(stream);
+        int actual = am.getStreamVolume(stream);
+        String decir;
+        try {
+            if (n.contains("silencia") || n.contains("silenciar") || n.contains("mute") || n.contains("calla")) {
+                am.setStreamVolume(stream, 0, 0);
+                decir = "Silenciado.";
+            } else if (n.contains("sube") || n.contains("aumenta") || n.contains("mas alto")) {
+                am.setStreamVolume(stream, Math.min(max, actual + Math.max(1, max / 8)), 0);
+                decir = "Subiendo el volumen.";
+            } else if (n.contains("baja") || n.contains("reduce") || n.contains("mas bajo")) {
+                am.setStreamVolume(stream, Math.max(0, actual - Math.max(1, max / 8)), 0);
+                decir = "Bajando el volumen.";
+            } else {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,3})").matcher(n);
+                if (!m.find()) return false;
+                int pct = Integer.parseInt(m.group(1));
+                if (pct > 100) pct = 100;
+                am.setStreamVolume(stream, Math.round(max * pct / 100f), 0);
+                decir = "Volumen al " + pct + " por ciento.";
+            }
+        } catch (Throwable t) {
+            decir = "No pude cambiar el volumen.";
+        }
+        host.showText(decir);
+        host.speak(decir, false);
+        return true;
+    }
+
+    /** Brillo: Settings.System directo; si no hay permiso se dice sin consultar la nube. */
+    private boolean ejecutarBrilloLocal(String n) {
+        if (!n.contains("brillo") && !n.contains("pantalla")) return false;
+        int valor = -1;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,3})").matcher(n);
+        if (m.find()) valor = Math.min(100, Integer.parseInt(m.group(1)));
+        if (valor < 0) {
+            valor = n.contains("sube") || n.contains("aumenta") || n.contains("mas")
+                    ? 85 : (n.contains("baja") || n.contains("reduce") || n.contains("menos") ? 30 : -1);
+        }
+        if (valor < 0) return false;
+        String decir;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(ctx)) {
+                decir = "No tengo permiso para cambiar el brillo.";
+            } else {
+                Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
+                        Math.max(1, Math.round(valor * 255f / 100f)));
+                decir = "Brillo al " + valor + " por ciento.";
+            }
+        } catch (Throwable t) {
+            decir = "No pude cambiar el brillo.";
+        }
+        host.showText(decir);
+        host.speak(decir, false);
+        return true;
+    }
+
+    /** Navegación: lanza la app de maps/Waze directamente desde el contexto del host. */
+    private boolean ejecutarNavegacionLocal(String n) {
+        boolean navegar = n.startsWith("navega") || n.contains("navegacion") || n.contains("guiame")
+                || n.contains("lle name") || n.contains("llevame") || n.contains("waze")
+                || n.contains("google maps") || n.contains("maps");
+        if (!navegar) return false;
+        String app = n.contains("waze") ? "Waze" : (n.contains("maps") ? "Google Maps" : "Waze");
+        boolean ok = false;
+        try { ok = AppLauncherHelper.abrirAppPorNombre(ctx, app); } catch (Throwable ignored) {}
+        String decir = ok ? "Abriendo navegación." : "No encontré la app de navegación.";
+        host.showText(decir);
+        host.speak(decir, false);
+        return true;
+    }
+
+    /** "Pon música"/"mis canciones" sin artista: abre SerMusic sin pasar por Gemini. */
+    private boolean ejecutarMusicaGenericaLocal(String n) {
+        String[] frases = {"musica", "mi musica", "mis musicas", "canciones", "mis canciones",
+                "reproduce musica", "pon musica", "pone musica", "escuchar musica", "sermusic"};
+        for (String f : frases) if (f.equals(n)) return ejecutarMusicaEnSerMusic("musica", "Reproduciendo tu música.");
         return false;
     }
 

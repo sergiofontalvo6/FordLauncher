@@ -38,6 +38,31 @@ public class DebugCommandReceiver extends BroadcastReceiver {
         //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es alert test_temp
         // Hook de pruebas: comprueba la detección de red que usan voz y copiloto.
         //   adb shell am broadcast -a com.fordlauncher.launcher.DEBUG_CMD --es net_check 1
+        // Prueba ADB: mide Gemini puro (requiere clave API guardada en Ajustes IA).
+        String geminiTime = intent.getStringExtra("gemini_time");
+        if (geminiTime != null) {
+            final long t = android.os.SystemClock.elapsedRealtime();
+            com.fordlauncher.launcher.ai.LatencyTrace.nuevoTurno("ADB-GEMINI", geminiTime);
+            com.fordlauncher.launcher.obd.GeminiDiagnosticClient.analyze(context,
+                    "{\"obd_conectado\":false}",
+                    "El conductor pregunta por voz: \"" + geminiTime + "\"",
+                    new com.fordlauncher.launcher.obd.GeminiDiagnosticClient.Callback() {
+                        public void onDone(String text, String error) {
+                            android.util.Log.i("FordLauncher/VoiceCmd", "gemini_time ms="
+                                    + (android.os.SystemClock.elapsedRealtime() - t)
+                                    + " error=" + error + " text=" + text);
+                        }
+                    });
+            return;
+        }
+        // Prueba ADB: mide la voz configurada (nube con Wi-Fi, local sin red).
+        String ttsTime = intent.getStringExtra("tts_time");
+        if (ttsTime != null) {
+            com.fordlauncher.launcher.ai.LatencyTrace.nuevoTurno("ADB-TTS", ttsTime);
+            com.fordlauncher.launcher.ai.TextToSpeechManager.getInstance(context)
+                    .hablarTextoLargo(ttsTime);
+            return;
+        }
         String netCheck = intent.getStringExtra("net_check");
         if (netCheck != null) {
             android.util.Log.i("FordLauncher/VoiceCmd", "net_check isNetworkAvailable="

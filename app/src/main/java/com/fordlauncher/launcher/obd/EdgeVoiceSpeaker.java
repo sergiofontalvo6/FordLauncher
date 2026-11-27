@@ -39,6 +39,8 @@ public class EdgeVoiceSpeaker {
     public interface Listener {
         void onSpeaking(boolean speaking);
         void onError(String msg);
+        /** Primer byte de audio tardó más de 2,5 s: el llamador debe hablar ya con el motor local. */
+        default void onTooSlow(String msg) { onError(msg); }
         default void onDone() {}
     }
 
@@ -51,18 +53,54 @@ public class EdgeVoiceSpeaker {
     private static final String ORIGIN = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
 
+    private static final int CONNECT_TIMEOUT_MS = 3000;
+    private static final int READ_TIMEOUT_MS = 5000;
+    private static final int FIRST_BYTE_TIMEOUT_MS = 2500;
+    private static final int MAX_FRASES = 4;
+
     private final Context ctx;
     private final AudioManager am;
     private final String voiceName;
     private final ExecutorService synthPool = Executors.newCachedThreadPool();
     private final Handler ui = new Handler();
+    private final java.util.concurrent.ConcurrentLinkedQueue<Conn> idle =
+            new java.util.concurrent.ConcurrentLinkedQueue<Conn>();
+    private final java.util.Set<Conn> activas = java.util.Collections.newSetFromMap(
+            new java.util.concurrent.ConcurrentHashMap<Conn, Boolean>());
+    private final java.util.concurrent.ConcurrentHashMap<Integer, File> listos =
+            new java.util.concurrent.ConcurrentHashMap<Integer, File>();
+    private final java.util.List<Future<?>> tareas = java.util.Collections.synchronizedList(
+            new java.util.ArrayList<Future<?>>());
     private Listener listener;
     private MediaPlayer player;
-    private Future<?> synthTask;
-    private volatile Socket socket;
     private volatile boolean speaking;
     private volatile long generation;
     private volatile File mp3File;
+    private volatile int totalFrases;
+    private volatile int siguiente;
+    private volatile long genReproduccion;
+    private volatile boolean errorAvisado;
+    private int reintentosSiguiente;
+    private boolean[] omitidas = new boolean[0];
+    private Runnable avisoLento;
+    private volatile boolean primerByteRecibido;
+
+    /** Conexión WebSocket reutilizable; nunca se comparte entre síntesis concurrentes. */
+    private static final class Conn {
+        final Socket socket;
+        final OutputStream out;
+        final BufferedInputStream in;
+        Conn(Socket s, OutputStream o, BufferedInputStream i) { socket = s; out = o; in = i; }
+        boolean usable() { return socket != null && socket.isConnected() && !socket.isClosed(); }
+        void close() { try { if (socket != null) socket.close(); } catch (Throwable ignored) {} }
+    }
+
+    private static final class DemasiadoLenta extends Exception {
+        DemasiadoLenta(String m) { super(m); }
+    }
+
+    /** Aviso del primer byte: permite encadenar la frase siguiente sin esperar al final. */
+    private interface OnPrimerByte { void onPrimerByte(); }
 
     private final AudioManager.OnAudioFocusChangeListener focusListener = new AudioManager.OnAudioFocusChangeListener() {
         public void onAudioFocusChange(int change) {}
@@ -82,98 +120,245 @@ public class EdgeVoiceSpeaker {
         final String clean = CarVoiceSpeaker.clean(rawText);
         stop(); // corta la sesión anterior (y su generación) si la hubiere
         final long myGen = ++generation;
-        setSpeaking(true); // visible desde ya: el botón pasa a "Detener" durante la síntesis
-        synthTask = synthPool.submit(new Runnable() {
+        java.util.List<String> frases = partirFrases(clean);
+        if (frases.isEmpty()) return;
+        totalFrases = frases.size();
+        siguiente = 0;
+        reintentosSiguiente = 0;
+        omitidas = new boolean[frases.size()];
+        listos.clear();
+        errorAvisado = false;
+        primerByteRecibido = false;
+        setSpeaking(true); // el botón pasa a "Detener" durante la síntesis
+        // El plazo se controla desde el hilo principal: si el worker está
+        // bloqueado en DNS/TLS, el fallback no puede retrasarse.
+        if (avisoLento != null) ui.removeCallbacks(avisoLento);
+        avisoLento = new Runnable() {
+            public void run() {
+                if (myGen == generation && !primerByteRecibido) {
+                    avisarLento(myGen, "sin audio en " + FIRST_BYTE_TIMEOUT_MS + "ms");
+                }
+            }
+        };
+        ui.postDelayed(avisoLento, FIRST_BYTE_TIMEOUT_MS);
+        // Pipeline: solo se abre una conexión hasta que llega el primer byte de
+        // la frase 1; entonces se descarga la 2 mientras suena la 1. Así el
+        // handshake TLS no compite con la primera frase (que es la que marca
+        // la latencia percibida).
+        sintetizarFrase(0, frases.get(0), myGen, frases);
+    }
+
+    private static java.util.List<String> partirFrases(String texto) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (texto == null) return out;
+        String[] partes = texto.split("(?<=[.!?])\\s+");
+        for (String p : partes) {
+            String s = p.trim();
+            if (s.length() > 0) out.add(s);
+            if (out.size() >= MAX_FRASES) break;
+        }
+        return out;
+    }
+
+    private void sintetizarFrase(final int indice, final String frase, final long myGen,
+                                 final java.util.List<String> todas) {
+        final boolean primera = (indice == 0);
+        Future<?> tarea = synthPool.submit(new Runnable() {
             public void run() {
                 byte[] mp3;
+                OnPrimerByte avance = null;
+                if (indice + 1 < todas.size()) {
+                    avance = new OnPrimerByte() {
+                        public void onPrimerByte() {
+                            if (myGen == generation) sintetizarFrase(indice + 1, todas.get(indice + 1), myGen, todas);
+                        }
+                    };
+                }
                 try {
-                    mp3 = synth(clean);
+                    mp3 = synth(frase, myGen, primera, avance);
+                } catch (DemasiadoLenta e) {
+                    if (primera) avisarLento(myGen, e.getMessage());
+                    else marcarOmitida(indice, myGen);
+                    return;
                 } catch (Throwable e) {
-                    if (myGen != generation) return; // cancelado por stop(): silencioso
-                    Log.w(TAG, "Edge synth error: " + e);
-                    setSpeaking(false);
-                    if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
+                    if (myGen != generation) return;
+                    Log.w(TAG, "Edge synth error frase " + (indice + 1) + ": " + e);
+                    if (primera) avisarError(myGen, "No se pudo obtener la voz en línea.");
+                    else marcarOmitida(indice, myGen);
                     return;
                 }
                 if (myGen != generation) return;
                 if (mp3 == null || mp3.length < 100) {
-                    Log.w(TAG, "Edge synth audio vacio: " + (mp3 == null ? -1 : mp3.length) + " bytes (voz=" + voiceName + ")");
-                    setSpeaking(false);
-                    if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
+                    Log.w(TAG, "Edge synth frase " + (indice + 1) + " vacía (" + (mp3 == null ? -1 : mp3.length) + " bytes)");
+                    if (primera) avisarError(myGen, "No se pudo obtener la voz en línea.");
+                    else marcarOmitida(indice, myGen);
                     return;
                 }
-                try {
-                    File f = new File(ctx.getCacheDir(), System.currentTimeMillis() + ".mp3");
-                    FileOutputStream fos = new FileOutputStream(f);
-                    fos.write(mp3);
-                    fos.close();
-                    mp3File = f;
-                } catch (Throwable e) {
-                    Log.w(TAG, "Edge mp3 write error: " + e);
-                    setSpeaking(false);
-                    if (listener != null) listener.onError("No se pudo obtener la voz en línea.");
+                final File f = guardar(mp3, indice);
+                if (f == null) {
+                    if (primera) avisarError(myGen, "No se pudo guardar el audio.");
+                    else marcarOmitida(indice, myGen);
                     return;
                 }
-                ui.post(new Runnable() { public void run() { if (myGen == generation) play(); } });
+                ui.post(new Runnable() {
+                    public void run() {
+                        if (myGen != generation) { f.delete(); return; }
+                        listos.put(indice, f);
+                        reintentosSiguiente = 0;
+                        reproducirSiguiente(myGen);
+                    }
+                });
+            }
+        });
+        tareas.add(tarea);
+    }
+
+    /** Una frase posterior falló: se salta sin cortar lo que ya está sonando. */
+    private void marcarOmitida(int indice, long gen) {
+        if (gen != generation) return;
+        ui.post(new Runnable() {
+            public void run() {
+                if (gen != generation) return;
+                synchronized (omitidas) { omitidas[indice] = true; }
+                reproducirSiguiente(gen);
             }
         });
     }
 
-    private void play() {
-        if (mp3File == null) return;
+    private File guardar(byte[] mp3, int indice) {
         try {
-            am.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
-        } catch (Throwable ignored) {}
+            File f = new File(ctx.getCacheDir(), "edge_" + System.currentTimeMillis() + "_" + indice + ".mp3");
+            FileOutputStream fos = new FileOutputStream(f);
+            fos.write(mp3);
+            fos.close();
+            return f;
+        } catch (Throwable e) {
+            Log.w(TAG, "Edge mp3 write error: " + e);
+            return null;
+        }
+    }
+
+    private void avisarLento(long gen, String motivo) {
+        if (gen != generation || errorAvisado) return;
+        errorAvisado = true;
+        Log.w(TAG, "Edge primer byte >" + FIRST_BYTE_TIMEOUT_MS + "ms: " + motivo);
+        final long g = gen;
+        ui.post(new Runnable() {
+            public void run() {
+                if (g == generation && listener != null) listener.onTooSlow("primer audio >" + FIRST_BYTE_TIMEOUT_MS + "ms");
+            }
+        });
+    }
+
+    private void avisarError(long gen, String msg) {
+        if (gen != generation || errorAvisado) return;
+        errorAvisado = true;
+        final String m = msg;
+        ui.post(new Runnable() {
+            public void run() {
+                if (gen != generation) return;
+                setSpeaking(false);
+                if (listener != null) listener.onError(m);
+            }
+        });
+    }
+
+    private void reproducirSiguiente(final long gen) {
+        if (gen != generation || player != null) return;
+        while (siguiente < totalFrases) {
+            boolean omitida;
+            synchronized (omitidas) {
+                omitida = siguiente < omitidas.length && omitidas[siguiente];
+            }
+            if (!omitida) break;
+            siguiente++; // frase fallida: se salta sin dejar el turno colgado
+        }
+        if (siguiente >= totalFrases) { terminarTodo(gen); return; }
+        File f = listos.remove(siguiente);
+        if (f == null) {
+            // Aún no llegó (está descargándose). Se reintenta un número acotado
+            // de veces para no cerrar el turno antes de que llegue el audio.
+            if (reintentosSiguiente++ < 60) {
+                ui.postDelayed(new Runnable() {
+                    public void run() { reproducirSiguiente(gen); }
+                }, 100);
+            } else {
+                Log.w(TAG, "Edge frase " + (siguiente + 1) + " no llegó; se cierra el turno");
+                terminarTodo(gen);
+            }
+            return;
+        }
+        reintentosSiguiente = 0;
+        siguiente++;
+        reproducir(f, gen);
+    }
+
+    private void reproducir(final File archivo, final long gen) {
+        mp3File = archivo;
+        genReproduccion = gen;
         try {
-            try { if (player != null) { player.release(); } } catch (Throwable ignored) {}
+            if (siguiente == 1) {
+                try { am.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK); } catch (Throwable ignored) {}
+            }
+            try { if (player != null) player.release(); } catch (Throwable ignored) {}
             player = new MediaPlayer();
             player.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            player.setDataSource(mp3File.getAbsolutePath());
+            player.setDataSource(archivo.getAbsolutePath());
+            final long bytes = archivo.length();
             player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                public void onCompletion(MediaPlayer mp) { finishPlay(); }
+                public void onCompletion(MediaPlayer mp) {
+                    try { mp.release(); } catch (Throwable ignored) {}
+                    if (player == mp) player = null;
+                    try { archivo.delete(); } catch (Throwable ignored) {}
+                    if (mp3File == archivo) mp3File = null;
+                    if (gen != generation) return;
+                    if (siguiente < totalFrases) reproducirSiguiente(gen);
+                    else terminarTodo(gen);
+                }
             });
             player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 public boolean onError(MediaPlayer mp, int what, int extra) {
                     Log.w(TAG, "Edge play error what=" + what + " extra=" + extra);
-                    finishPlay();
+                    terminarTodo(gen);
                     return true;
                 }
             });
-            final long bytes = mp3File.length();
-            final long genPlay = generation;
             player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 public void onPrepared(MediaPlayer mp) {
-                    if (genPlay != generation) {
-                        try { mp.release(); } catch (Throwable ignored) {}
-                        return;
-                    }
+                    if (gen != generation) { try { mp.release(); } catch (Throwable ignored) {} return; }
                     try {
                         mp.start();
+                        primerByteRecibido = true;
+                        if (avisoLento != null) ui.removeCallbacks(avisoLento);
                         setSpeaking(true);
-                        Log.w(TAG, "Edge play started (" + bytes + " bytes, voz=" + voiceName + ")");
+                        com.fordlauncher.launcher.ai.LatencyTrace.ttsReproduciendo("edge:" + voiceName);
+                        Log.w(TAG, "Edge play started frase " + siguiente + "/" + totalFrases
+                                + " (" + bytes + " bytes, voz=" + voiceName + ")");
                     } catch (Throwable e) {
                         Log.w(TAG, "Edge play start error: " + e);
-                        finishPlay();
+                        terminarTodo(gen);
                     }
                 }
             });
-            // prepareAsync evita bloquear el hilo principal en el arranque
-            // (CPU saturada), que era lo que entrecortaba el saludo.
+            // prepareAsync evita bloquear el hilo principal en la radio.
             player.prepareAsync();
         } catch (Throwable e) {
             Log.w(TAG, "Edge play error: " + e);
-            setSpeaking(false);
-            abandon();
+            terminarTodo(gen);
         }
     }
 
-    private void finishPlay() {
+    private void terminarTodo(long gen) {
         try { if (player != null) { player.release(); } } catch (Throwable ignored) {}
         player = null;
+        genReproduccion = gen;
         setSpeaking(false);
         abandon();
         try { if (mp3File != null) { mp3File.delete(); mp3File = null; } } catch (Throwable ignored) {}
-        if (listener != null) listener.onDone();
+        for (File f : listos.values()) { try { f.delete(); } catch (Throwable ignored) {} }
+        listos.clear();
+        if (listener != null && gen == generation) listener.onDone();
     }
 
     private void setSpeaking(boolean s) {
@@ -187,53 +372,103 @@ public class EdgeVoiceSpeaker {
 
     public void stop() {
         generation++; // invalida síntesis pendientes y reproducciones en cola
-        try { if (synthTask != null) { synthTask.cancel(true); synthTask = null; } } catch (Throwable ignored) {}
-        try { if (socket != null) socket.close(); } catch (Throwable ignored) {}
+        errorAvisado = true;
+        if (avisoLento != null) { ui.removeCallbacks(avisoLento); avisoLento = null; }
+        try {
+            synchronized (tareas) {
+                for (Future<?> t : tareas) { try { t.cancel(true); } catch (Throwable ignored) {} }
+                tareas.clear();
+            }
+        } catch (Throwable ignored) {}
+        // Microsoft cierra el WebSocket tras turn.end: reutilizarlo en otro
+        // turno produce 2,5 s sin audio. Se cierra todo al empezar cada turno;
+        // el pool solo sirve para las frases de una misma locución.
+        for (Conn c : activas) c.close();
+        activas.clear();
+        cerrarConexiones();
         try { if (player != null) { player.stop(); player.release(); } } catch (Throwable ignored) {}
         player = null;
         setSpeaking(false);
         abandon();
         try { if (mp3File != null) { mp3File.delete(); mp3File = null; } } catch (Throwable ignored) {}
+        for (File f : listos.values()) { try { f.delete(); } catch (Throwable ignored) {} }
+        listos.clear();
+        siguiente = 0;
+        totalFrases = 0;
+    }
+
+    private void cerrarConexiones() {
+        Conn c;
+        while ((c = idle.poll()) != null) c.close();
     }
 
     public void shutdown() {
         stop();
+        cerrarConexiones();
         try { synthPool.shutdownNow(); } catch (Throwable ignored) {}
     }
 
     // ---------- síntesis (WebSocket manual sobre SSLSocket) ----------
 
-    private byte[] synth(String text) throws Exception {
-        String token = secMsGec();
-        String connId = uuidHex();
-        String urlPath = "/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" + TOKEN
-                + "&ConnectionId=" + connId + "&Sec-MS-GEC=" + token + "&Sec-MS-GEC-Version=" + VERSION;
+    private String urlPath() {
+        return "/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" + TOKEN
+                + "&ConnectionId=" + uuidHex() + "&Sec-MS-GEC=" + secMsGec()
+                + "&Sec-MS-GEC-Version=" + VERSION;
+    }
+
+    private byte[] synth(String text, long gen, boolean primera, OnPrimerByte avance) throws Exception {
+        String urlPath = urlPath();
         // Intento con fábrica propia (IPv4), luego con la del sistema.
         try {
-            return synthOnce(urlPath, text, true);
+            return synthOnce(urlPath, text, true, gen, primera, avance);
+        } catch (DemasiadoLenta e) {
+            throw e; // no hay segunda espera: el llamador cae al motor local ya
         } catch (Throwable first) {
+            if (gen != generation) return null;
             Log.w(TAG, "Edge fábrica propia falló, reintento sistema: " + first);
-            return synthOnce(urlPath, text, false);
+            return synthOnce(urlPath(), text, false, gen, primera, avance);
         }
     }
 
-    private byte[] synthOnce(String urlPath, String text, boolean custom) throws Exception {
+    /** Toma una conexión libre del pool o abre una nueva con TCP_NODELAY y timeouts cortos. */
+    private Conn tomarConexion(String urlPath, boolean custom) throws Exception {
+        Conn c = null;
+        while ((c = idle.poll()) != null) {
+            if (c.usable()) break;
+            c.close();
+        }
+        if (c != null) Log.i(TAG, "Edge reutiliza conexión TLS (sin handshake)");
+        else c = abrirConexion(urlPath, custom);
+        try { c.socket.setSoTimeout(FIRST_BYTE_TIMEOUT_MS); } catch (Throwable ignored) {}
+        activas.add(c);
+        return c;
+    }
+
+    private Conn abrirConexion(String urlPath, boolean custom) throws Exception {
+        Socket plain = new Socket();
+        try { plain.setTcpNoDelay(true); } catch (Throwable ignored) {}
+        plain.connect(new java.net.InetSocketAddress(HOST, 443), CONNECT_TIMEOUT_MS);
         final Socket s;
         if (custom && com.fordlauncher.launcher.Net.customFactory() != null) {
-            Socket underlying = new Socket();
-            underlying.connect(new java.net.InetSocketAddress(HOST, 443), 15000);
-            s = com.fordlauncher.launcher.Net.customFactory().createSocket(underlying, HOST, 443, false);
+            s = com.fordlauncher.launcher.Net.customFactory().createSocket(plain, HOST, 443, false);
         } else {
             SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(null, null, null);
-            s = sc.getSocketFactory().createSocket();
-            s.connect(new java.net.InetSocketAddress(HOST, 443), 15000);
+            s = sc.getSocketFactory().createSocket(plain, HOST, 443, false);
         }
-        socket = s;
-        s.setSoTimeout(15000);
+        try { s.setTcpNoDelay(true); } catch (Throwable ignored) {}
+        s.setSoTimeout(CONNECT_TIMEOUT_MS);
         OutputStream out = s.getOutputStream();
         BufferedInputStream in = new BufferedInputStream(s.getInputStream());
-        // Handshake WebSocket
+        Conn c = new Conn(s, out, in);
+        if (!handshake(c, urlPath)) {
+            c.close();
+            throw new Exception("WebSocket handshake no aceptado");
+        }
+        return c;
+    }
+
+    private boolean handshake(Conn c, String urlPath) throws Exception {
         String key = base64Of16Random();
         StringBuilder req = new StringBuilder();
         req.append("GET ").append(urlPath).append(" HTTP/1.1\r\n");
@@ -249,65 +484,113 @@ public class EdgeVoiceSpeaker {
         req.append("Cache-Control: no-cache\r\n");
         req.append("Cookie: muid=").append(muidHex()).append(";\r\n");
         req.append("\r\n");
-        out.write(req.toString().getBytes("UTF-8"));
-        out.flush();
-        String statusLine = readLineBytes(in);
-        if (statusLine == null || !statusLine.contains("101")) {
-            try { s.close(); } catch (Throwable ignored) {}
-            throw new Exception("WebSocket handshake no aceptado: " + statusLine);
-        }
-        // Leer el resto de cabeceras hasta la linea vacia (descartar).
+        c.out.write(req.toString().getBytes("UTF-8"));
+        c.out.flush();
+        String statusLine = readLineBytes(c.in);
+        if (statusLine == null || !statusLine.contains("101")) return false;
         String line;
-        while ((line = readLineBytes(in)) != null && line.length() > 0) { /* cabeceras */ }
-        // Config + SSML
-        String ts = dateToString();
-        String cfg = "X-Timestamp:" + ts + "\r\n"
-                + "Content-Type:application/json; charset=utf-8\r\n"
-                + "Path:speech.config\r\n\r\n"
-                + "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":"
-                + "{\"sentenceBoundaryEnabled\":\"true\",\"wordBoundaryEnabled\":\"false\"},"
-                + "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
-        String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
-                + "<voice name='" + displayVoiceName(voiceName) + "'>"
-                + "<prosody pitch='" + PITCH_HZ + "' rate='+0%' volume='+0%'>"
-                + xmlEscape(text)
-                + "</prosody></voice></speak>";
-        String reqId = uuidHex();
-        String ss = "X-RequestId:" + reqId + "\r\n"
-                + "Content-Type:application/ssml+xml\r\n"
-                + "X-Timestamp:" + ts + "Z\r\n"
-                + "Path:ssml\r\n\r\n"
-                + ssml;
-        writeTextFrame(out, cfg);
-        writeTextFrame(out, ss);
-        // Leer audio
-        ByteArrayOutputStream audio = new ByteArrayOutputStream();
-        long deadline = System.currentTimeMillis() + 30000;
-        int nText = 0, nBin = 0; String firstText = "";
-        String exitReason = "deadline";
-        while (System.currentTimeMillis() < deadline) {
-            Frame f = readFrame(in);
-            if (f == null) { exitReason = "EOF"; break; } // EOF
-            if (f.opcode == 8) { exitReason = "close"; break; } // close
-            if (f.opcode == 9) { sendPong(out, f.payload); continue; } // ping
-            if (f.opcode == 2) { // binary
-                nBin++;
-                byte[] p = f.payload;
-                if (p.length >= 2) {
-                    int hlen = ((p[0] & 0xFF) << 8) | (p[1] & 0xFF);
-                    int dataStart = hlen + 2;
-                    if (dataStart < p.length) audio.write(p, dataStart, p.length - dataStart);
+        while ((line = readLineBytes(c.in)) != null && line.length() > 0) { /* cabeceras */ }
+        return true;
+    }
+
+    private byte[] synthOnce(String urlPath, String text, boolean custom, long gen,
+                             boolean primera, OnPrimerByte avance) throws Exception {
+        Conn c = tomarConexion(urlPath, custom);
+        boolean devolver = false;
+        try {
+            // Config + SSML
+            String ts = dateToString();
+            String cfg = "X-Timestamp:" + ts + "\r\n"
+                    + "Content-Type:application/json; charset=utf-8\r\n"
+                    + "Path:speech.config\r\n\r\n"
+                    + "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":"
+                    + "{\"sentenceBoundaryEnabled\":\"true\",\"wordBoundaryEnabled\":\"false\"},"
+                    + "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
+            String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
+                    + "<voice name='" + displayVoiceName(voiceName) + "'>"
+                    + "<prosody pitch='" + PITCH_HZ + "' rate='+0%' volume='+0%'>"
+                    + xmlEscape(text)
+                    + "</prosody></voice></speak>";
+            String reqId = uuidHex();
+            String ss = "X-RequestId:" + reqId + "\r\n"
+                    + "Content-Type:application/ssml+xml\r\n"
+                    + "X-Timestamp:" + ts + "Z\r\n"
+                    + "Path:ssml\r\n\r\n"
+                    + ssml;
+            writeTextFrame(c.out, cfg);
+            writeTextFrame(c.out, ss);
+            ByteArrayOutputStream audio = new ByteArrayOutputStream();
+            long t0 = android.os.SystemClock.elapsedRealtime();
+            long deadline = t0 + 12000;
+            int nText = 0, nBin = 0;
+            String exitReason = "deadline";
+            boolean primerAudio = false;
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                Frame f;
+                try {
+                    f = readFrame(c.in);
+                } catch (java.net.SocketTimeoutException e) {
+                    if (!primerAudio && primera) throw new DemasiadoLenta("sin audio en " + FIRST_BYTE_TIMEOUT_MS + "ms");
+                    exitReason = "timeout";
+                    break;
                 }
-            } else if (f.opcode == 1) { // text
-                nText++;
-                String t = new String(f.payload, "UTF-8");
-                if (firstText.length() == 0) firstText = t.substring(0, Math.min(500, t.length())).replace("\r", "\\r").replace("\n", ".");
-                if (t.contains("turn.end")) { exitReason = "turn.end"; break; }
+                if (f == null) { exitReason = "EOF"; break; }
+                if (f.opcode == 8) { exitReason = "close"; break; }
+                if (f.opcode == 9) { sendPong(c.out, f.payload); continue; }
+                if (!primerAudio && android.os.SystemClock.elapsedRealtime() - t0 > FIRST_BYTE_TIMEOUT_MS) {
+                    if (primera) throw new DemasiadoLenta("sin audio en " + FIRST_BYTE_TIMEOUT_MS + "ms");
+                    exitReason = "timeout";
+                    break;
+                }
+                if (f.opcode == 2) { // binary
+                    nBin++;
+                    byte[] p = f.payload;
+                    if (p.length >= 2) {
+                        int hlen = ((p[0] & 0xFF) << 8) | (p[1] & 0xFF);
+                        int dataStart = hlen + 2;
+                        if (dataStart < p.length) {
+                            if (!primerAudio) {
+                                primerAudio = true;
+                                if (primera) primerByteRecibido = true;
+                                try { c.socket.setSoTimeout(READ_TIMEOUT_MS); } catch (Throwable ignored) {}
+                                com.fordlauncher.launcher.ai.LatencyTrace.ttsPrimerByte();
+                                if (avance != null) avance.onPrimerByte();
+                            }
+                            audio.write(p, dataStart, p.length - dataStart);
+                        }
+                    }
+                } else if (f.opcode == 1) { // text
+                    nText++;
+                    String t = new String(f.payload, "UTF-8");
+                    if (t.contains("turn.end")) { exitReason = "turn.end"; break; }
+                }
+                if (gen != generation) return null;
             }
+            Log.i(TAG, "Edge frames text=" + nText + " bin=" + nBin + " audio=" + audio.size()
+                    + " exit=" + exitReason);
+            byte[] salida = audio.toByteArray();
+            // Solo se reutiliza si el servidor no envió `close` después de turn.end.
+            devolver = "turn.end".equals(exitReason) && salida.length > 0 && finLimpio(c);
+            Log.i(TAG, "Edge conexión " + (devolver ? "devuelta al pool" : "cerrada por el servidor"));
+            return salida.length > 0 ? salida : null;
+        } finally {
+            activas.remove(c);
+            if (devolver && c.usable() && idle.size() < MAX_FRASES) idle.offer(c);
+            else c.close();
         }
-        Log.w(TAG, "Edge frames text=" + nText + " bin=" + nBin + " audio=" + audio.size() + " exit=" + exitReason + " firstText=[" + firstText + "]");
-        try { s.close(); } catch (Throwable ignored) {}
-        return audio.toByteArray();
+    }
+
+    /** Comprueba si la conexión sigue viva tras turn.end (sin bloquear el turno). */
+    private boolean finLimpio(Conn c) {
+        try {
+            c.socket.setSoTimeout(150);
+            Frame f = readFrame(c.in);
+            return f == null;
+        } catch (java.net.SocketTimeoutException e) {
+            return true; // silencio: el servidor mantiene la conexión abierta
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     private static final class Frame {

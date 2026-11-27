@@ -449,6 +449,7 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
         if (anim != null) anim.listening();
         voice.startListening(new com.fordlauncher.launcher.obd.VoiceInputManager.VoiceCallback() {
             public void onQueryReady(String text) {
+                com.fordlauncher.launcher.ai.LatencyTrace.nuevoTurno("STT", text);
                 main.post(new Runnable() { public void run() { consultar(text); } });
             }
             public void onError(String msg) {
@@ -468,6 +469,7 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
     /** Simulación ADB del flujo real: misma ruta que el toque del botón. */
     public void simularConsulta(String query) {
         if (query == null || query.trim().length() == 0) return;
+        com.fordlauncher.launcher.ai.LatencyTrace.nuevoTurno("ADB-STT", query);
         consultar(query.trim());
     }
 

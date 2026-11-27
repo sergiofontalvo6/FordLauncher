@@ -16,8 +16,8 @@ android {
         minSdk 16
         // 28 a propósito: mantiene el comportamiento probado en pantallas viejas y nuevas.
         targetSdk 28
-        versionCode 52
-        versionName '2.10.19'
+        versionCode 53
+        versionName '2.10.20'
     }
 
     signingConfigs {
@@ -105,4 +105,7 @@ tasks.named('preBuild') { dependsOn legacyJar }
 
 dependencies {
     implementation files(layout.buildDirectory.file('intermediates/hiddenapi/fordlauncher-legacy-rc.jar')).builtBy(legacyJar)
+    // OKHttp 3.12: última rama compatible con minSdk 16; una sola instancia con
+    // keep-alive evita el handshake TLS por pregunta en la radio.
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
 }

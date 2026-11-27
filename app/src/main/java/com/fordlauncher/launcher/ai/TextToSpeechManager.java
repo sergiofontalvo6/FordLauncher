@@ -72,6 +72,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
     private EdgeVoiceSpeaker edge;
     private String edgeVoice;
     private volatile String ultimoId;
+    private volatile String primerIdLocal;
     private volatile String ultimoTextoNube;
     private volatile boolean isInitialized;
     private volatile boolean initializing;
@@ -184,6 +185,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                                 public void run() {
                                     if (edge == null) {
                                         Log.w(TAG, "EdgeVoiceSpeaker no disponible, usando motor local");
+                                        LatencyTrace.ttsFallback("edge no disponible");
                                         hablarLocal(t);
                                         return;
                                     }
@@ -194,7 +196,23 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
                             return;
                         }
                         Log.w(TAG, "Voz de nube no disponible tras reintento, usando motor local");
+                        LatencyTrace.ttsFallback("error nube");
                         hablarLocal(t);
+                    }
+                });
+            }
+            /** El primer byte de audio tardó demasiado: no hay segunda espera, se habla ya. */
+            public void onTooSlow(final String msg) {
+                main.post(new Runnable() {
+                    public void run() {
+                        final String t = ultimoTextoNube;
+                        reintentoNubeHecho = true;
+                        Log.w(TAG, "Voz de nube lenta (" + msg + "), usando motor local sin esperar");
+                        // Corta la síntesis en nube: de lo contrario se oirían
+                        // las dos voces a la vez al llegar el audio remoto.
+                        if (edge != null) { try { edge.stop(); } catch (Throwable ignored) {} }
+                        LatencyTrace.ttsFallback("primer audio >2500ms");
+                        if (t != null) hablarLocal(t, true);
                     }
                 });
             }
@@ -364,7 +382,10 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
 
     private void configurarListener() {
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            public void onStart(String id) { }
+            public void onStart(String id) {
+                // Solo el primer fragmento del turno actual marca el inicio de audio.
+                if (id != null && id.equals(primerIdLocal)) LatencyTrace.ttsReproduciendo("google(local)");
+            }
 
             public void onDone(String id) {
                 if (id != null && id.equals(ultimoId)) terminar(null);
@@ -426,6 +447,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
             if (edge == null) return false;
             ultimoTextoNube = texto;
             reintentoNubeHecho = false;
+            LatencyTrace.ttsInicio(nombreVoz, texto.length());
             edge.speak(texto);
             return true;
         } catch (Throwable t) {
@@ -455,6 +477,7 @@ public class TextToSpeechManager implements TextToSpeech.OnInitListener {
         solicitarAudioDucking();
         setSpeaking(true);
         long stamp = System.currentTimeMillis();
+        primerIdLocal = fragmentos.size() == 1 ? (LAST_CHUNK + stamp) : ("chunk_" + stamp + "_0");
         for (int i = 0; i < fragmentos.size(); i++) {
             boolean ultimo = (i == fragmentos.size() - 1);
             String uId = ultimo ? (LAST_CHUNK + stamp) : ("chunk_" + stamp + "_" + i);

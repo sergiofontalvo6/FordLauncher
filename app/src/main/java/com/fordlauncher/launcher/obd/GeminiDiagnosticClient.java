@@ -15,6 +15,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
+import okhttp3.ConnectionPool;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 /** Cliente del diagnostico por IA (Google Gemini 1.5 Flash gratuito). */
 public class GeminiDiagnosticClient {
     public interface Callback { void onDone(String text, String error); }
@@ -24,6 +31,37 @@ public class GeminiDiagnosticClient {
     private static final ExecutorService POOL = Executors.newCachedThreadPool();
     private static final ExecutorService NET = Executors.newCachedThreadPool();
     public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
+    /** Modelo rápido sin razonamiento extendido; alias anterior como respaldo. */
+    public static final String MODEL_VOZ = "gemini-2.5-flash-lite";
+    private static final String MODEL_ALIAS = "gemini-flash-lite-latest";
+    private static final int MAX_TOKENS_VOZ = 120;
+    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    /** Un único cliente HTTP para todas las preguntas: keep-alive y TLS caliente. */
+    private static volatile OkHttpClient http;
+
+    private static OkHttpClient http(Context ctx) {
+        OkHttpClient c = http;
+        if (c != null) return c;
+        synchronized (GeminiDiagnosticClient.class) {
+            if (http == null) {
+                try { com.fordlauncher.launcher.Net.init(ctx); } catch (Throwable ignored) {}
+                OkHttpClient.Builder b = new OkHttpClient.Builder()
+                        .connectTimeout(4, TimeUnit.SECONDS)
+                        .readTimeout(6, TimeUnit.SECONDS)
+                        .writeTimeout(4, TimeUnit.SECONDS)
+                        .retryOnConnectionFailure(true)
+                        .connectionPool(new ConnectionPool(4, 5, TimeUnit.MINUTES));
+                // En head units antiguos hace falta la fábrica TLS de la app.
+                try {
+                    javax.net.ssl.SSLSocketFactory f = com.fordlauncher.launcher.Net.customFactory();
+                    javax.net.ssl.X509TrustManager tm = com.fordlauncher.launcher.Net.trustManager();
+                    if (f != null && tm != null) b.sslSocketFactory(f, tm);
+                } catch (Throwable ignored) {}
+                http = b.build();
+            }
+            return http;
+        }
+    }
 
     // Memoria conversacional: turnos user/model persistidos en almacenamiento local.
     private static final java.util.List<String> HISTORY = new java.util.ArrayList<String>();
@@ -101,7 +139,8 @@ public class GeminiDiagnosticClient {
     }
 
     /** Cuerpo de la petición: systemInstruction + historial + el turno actual del usuario. */
-    private static String bodyJson(Context ctx, String systemText, String userText, boolean conversacion) {
+    private static String bodyJson(Context ctx, String systemText, String userText, boolean conversacion,
+                                   String modelo, int maxTokens) {
         ensureLoaded(ctx);
         synchronized (HISTORY) {
             // Memoria persistente: no se borra por inactividad, solo se actualiza el saludo de sesión.
@@ -115,8 +154,13 @@ public class GeminiDiagnosticClient {
             for (String t : HISTORY) b.append(t).append(",");
             b.append(turn("user", userText));
             b.append("]");
-            b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(conversacion ? 220 : 140)
-             .append(",\"temperature\":0.4}}");
+            b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(maxTokens)
+             .append(",\"temperature\":0.2}");
+            // gemini-2.5*: thinkingBudget=0 desactiva el razonamiento extendido.
+            if (modelo != null && modelo.startsWith("gemini-2.5")) {
+                b.append(",\"thinkingConfig\":{\"thinkingBudget\":0}");
+            }
+            b.append("}");
             return b.toString();
         }
     }
@@ -204,7 +248,7 @@ public class GeminiDiagnosticClient {
                 + "SALUDO: " + (primera
                     ? "esta es la primera interacción de la sesión; puedes saludar brevemente por su nombre al inicio."
                     : "ya lo saludaste en esta sesión. Está PROHIBIDO volver a decir 'Hola', 'Buenos días' o saludar por su nombre al inicio. Entra directo a responder.")
-                + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; frases cortas para leer en voz alta mientras conduce. "
+                + " FORMATO DE VOZ: sin asteriscos, viñetas ni markdown; MÁXIMO 1 o 2 frases cortas (30 palabras) para leer en voz alta mientras conduce. Responde directo, sin preámbulos. "
                 + "ACCIONES DEL SISTEMA (solo si el usuario pide algo directamente): "
                 + "Puedes controlar la radio: abrir cualquier aplicación instalada (SerMusic, Waze, Maps, YouTube, Ajustes, Radio FM, Teléfono, etc.) "
                 + "y realizar llamadas a contactos o números. "
@@ -266,6 +310,65 @@ public class GeminiDiagnosticClient {
         analyze(ctx, jsonSnapshot, task, false, callback);
     }
 
+    /**
+     * Petición única con keep-alive. `generateContent` evita el overhead de SSE
+     * completa; si el modelo 2.5 no está habilitado para la clave se prueba el
+     * alias clásico sin repetir el cuerpo ni crear otro cliente HTTP.
+     */
+    private static String requestText(Context ctx, byte[] bytes, String key) throws Exception {
+        OkHttpClient client = http(ctx);
+        String[] modelos = {MODEL_VOZ, MODEL_ALIAS};
+        Exception ultimo = null;
+        for (String modelo : modelos) {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/" + modelo
+                    + ":generateContent?key=" + key;
+            Request req = new Request.Builder().url(url)
+                    .post(RequestBody.create(JSON, bytes))
+                    .header("Accept", "application/json")
+                    .build();
+            long t = android.os.SystemClock.elapsedRealtime();
+            try {
+                Response r = client.newCall(req).execute();
+                try {
+                    int code = r.code();
+                    Log.i("FordLauncher/AI", "Gemini " + modelo + " HTTP " + code
+                            + " en " + (android.os.SystemClock.elapsedRealtime() - t) + "ms");
+                    if ((code == 400 || code == 404) && !MODEL_ALIAS.equals(modelo)) {
+                        ultimo = new Exception("modelo no disponible: HTTP " + code);
+                        continue;
+                    }
+                    String raw = r.body() == null ? "" : r.body().string();
+                    if (!r.isSuccessful()) {
+                        String detalle = raw.trim();
+                        if (detalle.length() > 180) detalle = detalle.substring(0, 180);
+                        ultimo = new Exception("HTTP " + code + " " + detalle);
+                        continue;
+                    }
+                    com.fordlauncher.launcher.ai.LatencyTrace.iaModelo(modelo);
+                    String texto = extractText(raw);
+                    if (texto == null) texto = extractSse(raw);
+                    return texto;
+                } finally {
+                    r.close();
+                }
+            } catch (Exception e) {
+                ultimo = e;
+                Log.w("FordLauncher/AI", "Gemini " + modelo + " falló: " + e);
+            }
+        }
+        // Respaldo para head units donde el TLS de OkHttp no es suficiente.
+        try {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL_ALIAS
+                    + ":generateContent?key=" + key;
+            byte[] out = com.fordlauncher.launcher.Net.postJson(url, bytes, 6000);
+            com.fordlauncher.launcher.ai.LatencyTrace.iaModelo(MODEL_ALIAS);
+            String texto = extractText(new String(out, "UTF-8"));
+            if (texto == null) texto = extractSse(new String(out, "UTF-8"));
+            return texto;
+        } catch (Throwable ignore) {}
+        throw ultimo == null ? new Exception("Gemini sin respuesta") : ultimo;
+    }
+
     /** @param detailed true: respuesta "uno por uno" (un sensor por línea) con más tokens. */
     public static void analyze(final Context ctx, final String jsonSnapshot, final String task, final boolean detailed, final Callback callback) {
         final String key = apiKey(ctx);
@@ -278,7 +381,7 @@ public class GeminiDiagnosticClient {
                 ? task
                 : "Analiza estos datos OBD2 y códigos de falla";
         final String formato = conversacion
-                ? " Responde de forma natural y directa, en 1 a 3 oraciones."
+                ? " Responde de forma natural y directa, en 1 o 2 frases cortas (máx 30 palabras)."
                 : detailed
                     ? " Responde breve: máximo 6 líneas, una por sensor o ítem relevante con estado (OK o ANOMALÍA) y causa probable. Sin asteriscos ni viñetas complejas."
                     : " Responde muy breve (máx 45 palabras) en 3 puntos: 1) diagnóstico, 2) gravedad (Bajo/Medio/Alto), 3) qué revisar. Sin asteriscos ni viñetas.";
@@ -289,31 +392,25 @@ public class GeminiDiagnosticClient {
                     return;
                 }
                 try {
-                    // Streaming (SSE): el primer token llega en segundos aunque la
-                    // generación total tarde más; se acumula por fragmentos.
-                    // Alias "latest" lite: responde en ~1 s; los modelos 3.8+ tardan
-                    // >50 s con esta clave y los 2.5 están vetados para usuarios nuevos.
-                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:streamGenerateContent?alt=sse&key=" + key;
                     final boolean primera = !saludadoEnSesion;
                     ensureLoaded(ctx);
                     String systemPrompt = systemPrompt(userName, carName, primera, obdConectado);
                     String userText = taskText + ": " + snap + "." + formato;
-                    String body = bodyJson(ctx, systemPrompt, userText, conversacion);
+                    // 120 tokens solo en voz; el diagnóstico detallado conserva su límite.
+                    String body = bodyJson(ctx, systemPrompt, userText, conversacion, MODEL_VOZ,
+                            conversacion ? MAX_TOKENS_VOZ : 140);
                     final byte[] bytes = body.getBytes("UTF-8");
-                    final String reqUrl = url;
-                    // Plazo reducido para priorizar respuesta rápida en la radio.
+                    // Un solo cliente OkHttp con keep-alive; el Future acota el plazo
+                    // aunque el DNS/TLS se cuelgue en una radio Android vieja.
                     Future<String> fut = NET.submit(new Callable<String>() {
-                        public String call() throws Exception {
-                            byte[] out = com.fordlauncher.launcher.Net.postJson(reqUrl, bytes, 12000);
-                            return extractSse(new String(out, "UTF-8"));
-                        }
+                        public String call() throws Exception { return requestText(ctx, bytes, key); }
                     });
                     String text;
                     try {
-                        text = fut.get(20000, TimeUnit.MILLISECONDS);
+                        text = fut.get(10000, TimeUnit.MILLISECONDS);
                     } catch (TimeoutException e) {
                         try { fut.cancel(true); } catch (Throwable ignored) {}
-                        Log.w("FordLauncher/AI", "Gemini timeout 45s: " + e);
+                        Log.w("FordLauncher/AI", "Gemini timeout 10s");
                         if (callback != null) callback.onDone(null, ERR_CONN);
                         return;
                     } catch (CancellationException e) {

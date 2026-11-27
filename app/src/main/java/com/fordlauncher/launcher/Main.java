@@ -1474,6 +1474,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
             public void onQueryReady(String text) {
                 fabEscuchando = false;
                 if (!modoConversacionActivo) return;
+                com.fordlauncher.launcher.ai.LatencyTrace.nuevoTurno("STT", text);
                 fabAskAi(text);
             }
             public void onError(String msg) {

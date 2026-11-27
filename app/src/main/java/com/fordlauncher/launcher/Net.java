@@ -33,10 +33,13 @@ import javax.net.ssl.X509TrustManager;
  */
 public class Net {
     private static SSLSocketFactory factory;
+    private static X509TrustManager trustManager;
     private static final java.util.concurrent.ExecutorService POST_POOL = java.util.concurrent.Executors.newCachedThreadPool();
 
     /** Fábrica propia (IPv4 + TLS 1.2) para reuso (Edge TTS); null si no está inicializada. */
     public static SSLSocketFactory customFactory() { return factory; }
+    /** Trust manager de la fábrica propia, para reutilizarla también desde OkHttp. */
+    public static X509TrustManager trustManager() { return trustManager; }
     static String initInfo = "sin iniciar";
 
     /**
@@ -105,6 +108,7 @@ public class Net {
             SSLContext ctx;
             try { ctx = SSLContext.getInstance("TLSv1.2"); } catch (Throwable e) { ctx = SSLContext.getInstance("TLS"); }
             ctx.init(null, new TrustManager[]{both}, null);
+            trustManager = both;
             factory = new Tls12Factory(ctx.getSocketFactory());
             initInfo = "TLS listo (" + ctx.getProtocol() + "), " + i + " raíces" + (bad > 0 ? ", " + bad + " omitidas" : "");
         } catch (Throwable e) {
