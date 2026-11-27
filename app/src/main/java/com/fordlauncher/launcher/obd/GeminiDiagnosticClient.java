@@ -14,15 +14,22 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
+import java.util.Collections;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.security.cert.CertPathValidatorException;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLHandshakeException;
 
 import okhttp3.ConnectionPool;
+import okhttp3.ConnectionSpec;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-/** Cliente del diagnostico por IA (Google Gemini 1.5 Flash gratuito). */
+/** Cliente del diagnostico por IA (Google Gemini Flash Lite, bajo consumo). */
 public class GeminiDiagnosticClient {
     public interface Callback { void onDone(String text, String error); }
 
@@ -30,9 +37,9 @@ public class GeminiDiagnosticClient {
     // HttpURLConnection; cada analyze debe poder terminar en su propio plazo.
     private static final ExecutorService POOL = Executors.newCachedThreadPool();
     private static final ExecutorService NET = Executors.newCachedThreadPool();
-    public static final String ERR_CONN = "Sin conexión a internet o clave API no válida.";
-    /** Modelo rápido sin razonamiento extendido; alias anterior como respaldo. */
-    public static final String MODEL_VOZ = "gemini-2.5-flash-lite";
+    private static final String TAG = "GeminiClient";
+    /** Modelo rápido disponible para cuentas nuevas; alias estable como respaldo. */
+    public static final String MODEL_VOZ = "gemini-3.5-flash-lite";
     private static final String MODEL_ALIAS = "gemini-flash-lite-latest";
     private static final int MAX_TOKENS_VOZ = 120;
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
@@ -44,12 +51,17 @@ public class GeminiDiagnosticClient {
         if (c != null) return c;
         synchronized (GeminiDiagnosticClient.class) {
             if (http == null) {
+                // Android 8.1 se beneficia del proveedor de seguridad actualizado
+                // de Google Play Services. Se llama por reflexión para no añadir
+                // dependencias GMS al APK (F-Droid).
+                installProvider(ctx);
                 try { com.fordlauncher.launcher.Net.init(ctx); } catch (Throwable ignored) {}
                 OkHttpClient.Builder b = new OkHttpClient.Builder()
                         .connectTimeout(4, TimeUnit.SECONDS)
                         .readTimeout(6, TimeUnit.SECONDS)
                         .writeTimeout(4, TimeUnit.SECONDS)
                         .retryOnConnectionFailure(true)
+                        .connectionSpecs(Collections.singletonList(ConnectionSpec.MODERN_TLS))
                         .connectionPool(new ConnectionPool(4, 5, TimeUnit.MINUTES));
                 // En head units antiguos hace falta la fábrica TLS de la app.
                 try {
@@ -60,6 +72,29 @@ public class GeminiDiagnosticClient {
                 http = b.build();
             }
             return http;
+        }
+    }
+
+    /** Proveedor TLS de Play Services sin dependencia GMS: se invoca si está en el equipo. */
+    private static void installProvider(Context ctx) {
+        try {
+            Class<?> pi = Class.forName("com.google.android.gms.security.ProviderInstaller");
+            Class<?> listener = Class.forName(
+                    "com.google.android.gms.security.ProviderInstaller$ProviderInstallerListener");
+            Object cb = java.lang.reflect.Proxy.newProxyInstance(listener.getClassLoader(),
+                    new Class<?>[]{listener}, new java.lang.reflect.InvocationHandler() {
+                        public Object invoke(Object proxy, java.lang.reflect.Method m, Object[] args) {
+                            if ("onProviderInstallFailed".equals(m.getName()) && args != null && args.length > 1) {
+                                Log.e(TAG, "ProviderInstaller falló: " + args[1]);
+                            }
+                            return null;
+                        }
+                    });
+            java.lang.reflect.Method m = pi.getMethod("installIfNeededAsync", Context.class, listener);
+            m.invoke(null, ctx == null ? null : ctx.getApplicationContext(), cb);
+            Log.i(TAG, "ProviderInstaller solicitado (async)");
+        } catch (Throwable t) {
+            Log.i(TAG, "ProviderInstaller no disponible: " + t);
         }
     }
 
@@ -155,12 +190,17 @@ public class GeminiDiagnosticClient {
             b.append(turn("user", userText));
             b.append("]");
             b.append(",\"generationConfig\":{\"maxOutputTokens\":").append(maxTokens)
-             .append(",\"temperature\":0.2}");
-            // gemini-2.5*: thinkingBudget=0 desactiva el razonamiento extendido.
+             .append(",\"temperature\":0.2");
+            // Pensamiento mínimo para bajar la latencia, DENTRO de generationConfig.
+            // Google retiró gemini-2.5-flash para cuentas nuevas (HTTP 404) y en
+            // Gemini 3.x el equivalente a thinkingBudget=0 es thinkingLevel=MINIMAL.
             if (modelo != null && modelo.startsWith("gemini-2.5")) {
                 b.append(",\"thinkingConfig\":{\"thinkingBudget\":0}");
+            } else if (modelo != null && modelo.startsWith("gemini-3.")) {
+                b.append(",\"thinkingConfig\":{\"thinkingLevel\":\"MINIMAL\"}");
             }
-            b.append("}");
+            // Cierra generationConfig y el objeto raíz de la petición.
+            b.append("}}");
             return b.toString();
         }
     }
@@ -284,7 +324,9 @@ public class GeminiDiagnosticClient {
     static String apiKey(Context c) {
         try {
             String k = c.getSharedPreferences("launcher", 0).getString("gemini_api_key", "");
-            return k == null ? "" : k.trim();
+            if (k == null) return "";
+            // Un salto de línea pegado al copiar la clave provoca HTTP 400.
+            return k.replace("\r", "").replace("\n", "").trim();
         } catch (Throwable t) { return ""; }
     }
 
@@ -310,38 +352,94 @@ public class GeminiDiagnosticClient {
         analyze(ctx, jsonSnapshot, task, false, callback);
     }
 
+    /** Error HTTP con el cuerpo exacto devuelto por Google. */
+    private static final class ApiError extends Exception {
+        final int code;
+        final String body;
+        ApiError(int code, String body) {
+            super("HTTP " + code);
+            this.code = code;
+            this.body = body == null ? "" : body;
+        }
+        String mensaje() {
+            String detail = serverMessage(body);
+            if (code == 404) return "Error API 404: modelo no encontrado";
+            if (code == 403 || (code == 400 && looksLikeKeyIssue(detail)))
+                return "Error API " + code + ": clave inválida";
+            if (code == 429) return "Error API 429: cuota agotada";
+            if (code >= 500) return "Error API " + code + ": servidor no disponible";
+            return detail.length() == 0 ? "Error API " + code
+                    : "Error API " + code + ": " + recortar(detail, 90);
+        }
+    }
+
+    private static String serverMessage(String body) {
+        try { return new org.json.JSONObject(body).optJSONObject("error").optString("message", ""); }
+        catch (Throwable t) { return body == null ? "" : body.trim(); }
+    }
+
+    private static boolean looksLikeKeyIssue(String s) {
+        String b = (s == null ? "" : s).toLowerCase(java.util.Locale.ROOT);
+        return b.contains("api key") || b.contains("api_key") || b.contains("permission")
+                || b.contains("not enabled") || b.contains("unauthorized") || b.contains("invalid key");
+    }
+
+    private static String recortar(String s, int max) {
+        if (s == null) return "";
+        String t = s.trim();
+        return t.length() <= max ? t : t.substring(0, max) + "…";
+    }
+
+    /** Mensaje específico para fallos de red/SSL (nunca el genérico de clave). */
+    static String mensajeRed(Throwable e) {
+        Throwable c = e == null ? new Exception("desconocido") : e;
+        if (c instanceof ExecutionException && c.getCause() != null) c = c.getCause();
+        if (c instanceof SSLHandshakeException || c instanceof CertPathValidatorException
+                || c instanceof SSLException) {
+            return "Error SSL/Red: " + c.getClass().getSimpleName();
+        }
+        if (c instanceof SocketTimeoutException) return "Error de red: tiempo de espera agotado";
+        if (c instanceof UnknownHostException) return "Error de red: DNS no disponible";
+        if (c instanceof java.io.IOException) {
+            return "Error de red: " + recortar(String.valueOf(c.getMessage()), 90);
+        }
+        return "Error inesperado: " + c.getClass().getSimpleName();
+    }
+
     /**
      * Petición única con keep-alive. `generateContent` evita el overhead de SSE
      * completa; si el modelo 2.5 no está habilitado para la clave se prueba el
-     * alias clásico sin repetir el cuerpo ni crear otro cliente HTTP.
+     * respaldo sin repetir el cuerpo ni crear otro cliente HTTP.
      */
     private static String requestText(Context ctx, byte[] bytes, String key) throws Exception {
         OkHttpClient client = http(ctx);
         String[] modelos = {MODEL_VOZ, MODEL_ALIAS};
         Exception ultimo = null;
         for (String modelo : modelos) {
+            // La clave viaja en cabecera: nunca se escribe en el log ni en la URL.
             String url = "https://generativelanguage.googleapis.com/v1beta/models/" + modelo
-                    + ":generateContent?key=" + key;
+                    + ":generateContent";
             Request req = new Request.Builder().url(url)
                     .post(RequestBody.create(JSON, bytes))
                     .header("Accept", "application/json")
+                    .header("x-goog-api-key", key)
                     .build();
             long t = android.os.SystemClock.elapsedRealtime();
             try {
                 Response r = client.newCall(req).execute();
                 try {
                     int code = r.code();
-                    Log.i("FordLauncher/AI", "Gemini " + modelo + " HTTP " + code
-                            + " en " + (android.os.SystemClock.elapsedRealtime() - t) + "ms");
-                    if ((code == 400 || code == 404) && !MODEL_ALIAS.equals(modelo)) {
-                        ultimo = new Exception("modelo no disponible: HTTP " + code);
-                        continue;
-                    }
                     String raw = r.body() == null ? "" : r.body().string();
+                    if (code == 200) {
+                        Log.i(TAG, "Gemini " + modelo + " HTTP 200 en "
+                                + (android.os.SystemClock.elapsedRealtime() - t) + "ms");
+                    } else {
+                        // Código HTTP exacto y cuerpo completo del error de Google.
+                        Log.e(TAG, "Gemini " + modelo + " HTTP " + code
+                                + " body=" + recortar(raw, 600));
+                    }
                     if (!r.isSuccessful()) {
-                        String detalle = raw.trim();
-                        if (detalle.length() > 180) detalle = detalle.substring(0, 180);
-                        ultimo = new Exception("HTTP " + code + " " + detalle);
+                        ultimo = new ApiError(code, raw);
                         continue;
                     }
                     com.fordlauncher.launcher.ai.LatencyTrace.iaModelo(modelo);
@@ -352,8 +450,8 @@ public class GeminiDiagnosticClient {
                     r.close();
                 }
             } catch (Exception e) {
+                if (!(e instanceof ApiError)) Log.e(TAG, "Fallo de red/SSL con " + modelo, e);
                 ultimo = e;
-                Log.w("FordLauncher/AI", "Gemini " + modelo + " falló: " + e);
             }
         }
         // Respaldo para head units donde el TLS de OkHttp no es suficiente.
@@ -365,7 +463,10 @@ public class GeminiDiagnosticClient {
             String texto = extractText(new String(out, "UTF-8"));
             if (texto == null) texto = extractSse(new String(out, "UTF-8"));
             return texto;
-        } catch (Throwable ignore) {}
+        } catch (Throwable e) {
+            Log.e(TAG, "Respaldo Net.postJson falló", e);
+            if (e instanceof Exception && !(ultimo instanceof ApiError)) ultimo = (Exception) e;
+        }
         throw ultimo == null ? new Exception("Gemini sin respuesta") : ultimo;
     }
 
@@ -410,15 +511,16 @@ public class GeminiDiagnosticClient {
                         text = fut.get(10000, TimeUnit.MILLISECONDS);
                     } catch (TimeoutException e) {
                         try { fut.cancel(true); } catch (Throwable ignored) {}
-                        Log.w("FordLauncher/AI", "Gemini timeout 10s");
-                        if (callback != null) callback.onDone(null, ERR_CONN);
+                        Log.e(TAG, "Gemini timeout 10s", e);
+                        if (callback != null) callback.onDone(null, "Error de red: tiempo de espera agotado");
                         return;
                     } catch (CancellationException e) {
                         return;
                     } catch (ExecutionException e) {
                         Throwable c = e.getCause() != null ? e.getCause() : e;
-                        Log.w("FordLauncher/AI", "Gemini error: " + c);
-                        if (callback != null) callback.onDone(null, ERR_CONN);
+                        Log.e(TAG, "Gemini falló", c);
+                        String msg = c instanceof ApiError ? ((ApiError) c).mensaje() : mensajeRed(c);
+                        if (callback != null) callback.onDone(null, msg);
                         return;
                     }
                     if (text == null || text.length() == 0) {
@@ -433,7 +535,8 @@ public class GeminiDiagnosticClient {
                     registrarRespuesta(ctx, userText, paraVoz);
                     if (callback != null) callback.onDone(paraVoz, null);
                 } catch (Throwable e) {
-                    if (callback != null) callback.onDone(null, ERR_CONN);
+                    Log.e(TAG, "Gemini error inesperado", e);
+                    if (callback != null) callback.onDone(null, mensajeRed(e));
                 }
             }
         });

@@ -539,6 +539,11 @@ public class VoiceOverlayService extends Service implements AssistantActionEngin
     }
 
     @Override public void notifyUser(String text) {
+        // Los errores de la API deben quedar rastreables incluso si el toast se
+        // muestra sobre otra app y desaparece antes de poder leerlo.
+        if (text != null && text.startsWith("Error ")) {
+            Log.e("GeminiClient", "Aviso al conductor: " + text);
+        }
         // Los toasts del servicio se muestran sobre cualquier app.
         try { android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show(); }
         catch (Throwable ignored) {}
