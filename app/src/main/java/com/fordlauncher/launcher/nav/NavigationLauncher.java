@@ -43,14 +43,14 @@ public final class NavigationLauncher {
                 uri = Uri.parse("https://waze.com/ul?q=" + Uri.encode(destino) + "&navigate=yes");
             }
             Intent i = new Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(i);
             return true;
         } catch (Throwable t) {
             try {
                 Intent launch = c.getPackageManager().getLaunchIntentForPackage(pkg);
                 if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     c.startActivity(launch);
                     return true;
                 }

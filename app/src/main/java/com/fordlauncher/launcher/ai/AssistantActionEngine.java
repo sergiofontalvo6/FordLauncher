@@ -637,14 +637,14 @@ public final class AssistantActionEngine {
                 "llevame a la ", "llevame ala ", "llevame al ", "llevame a ",
                 "navegacion hacia ", "navegacion a ", "navega hacia ", "navega al ", "navega a ",
                 "guiame hacia ", "guiame al ", "guiame a ", "guia a ", "guia al ",
-                "ruta hacia ", "ruta a ", "waze al ", "waze a ",
+                "ruta hacia ", "ruta a la ", "ruta al ", "ruta a ", "waze al ", "waze a ",
                 "google maps a ", "maps al ", "maps a ",
                 "ir al ", "ir a ", "vamos al ", "vamos a "
         };
         for (String p : prefijos) {
             if (s.startsWith(p)) { s = s.substring(p.length()).trim(); break; }
         }
-        s = s.replaceFirst("^(navega|navegar|navegacion|guia|guiame|llevame|waze|google maps|maps)\\s+", "").trim();
+        s = s.replaceFirst("^(navega|navegar|navegacion|guia|guiame|llevame|ruta|waze|google maps|maps)\\s+", "").trim();
         s = s.replaceFirst("^(a|al|hacia|a la|ala)\\s+", "").trim();
         s = s.replaceFirst("^(la|el|las|los)\\s+", "").trim();
         s = s.replaceAll("\\s+(por favor|en waze|en maps|por waze)$", "").trim();
