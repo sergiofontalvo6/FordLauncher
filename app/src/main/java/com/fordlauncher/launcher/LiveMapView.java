@@ -53,12 +53,17 @@ public class LiveMapView extends View {
     private final boolean hi;                   // teselas @2x en pantallas densas
     private final File dir;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    /** Antes eran 48 entradas sin control de bytes: podían ser varios MiB de teselas. */
-    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(2 * 1024 * 1024) {
+    /** Caché suficiente para la tarjeta completa: con 2 MB se descartaban teselas y el mapa parpadeaba en gris. */
+    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(tileCacheBytes()) {
         @Override protected int sizeOf(String key, Bitmap value) {
             return value == null ? 0 : value.getByteCount();
         }
     };
+
+    private static int tileCacheBytes() {
+        long quarter = Runtime.getRuntime().maxMemory() / 8;
+        return (int) Math.min(Math.max(12L * 1024 * 1024, quarter), 32L * 1024 * 1024);
+    }
     private final HashSet<String> pending = new HashSet<String>();
     private final HashSet<String> failed = new HashSet<String>();
     private final LinkedList<String> queue = new LinkedList<String>();
@@ -68,6 +73,22 @@ public class LiveMapView extends View {
     private float bearing = Float.NaN;
     private int zoom = 16;
     private int netErrors;
+
+    // Evita repintar la tarjeta completa en cada tick de GPS si la posición no cambia lo suficiente.
+    private double drawnLat = Double.NaN, drawnLon = Double.NaN;
+    private float drawnBearing = Float.NaN;
+    private boolean redrawPending;
+    private final Runnable redraw = new Runnable() {
+        public void run() { redrawPending = false; invalidate(); }
+    };
+    private static final double MIN_MOVE_DEG = 0.000015;
+
+    private void scheduleRedraw() {
+        if (redrawPending) return;
+        redrawPending = true;
+        ui.removeCallbacks(redraw);
+        ui.postDelayed(redraw, 80);
+    }
 
     private final Paint tile = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint grid = new Paint();
@@ -106,7 +127,7 @@ public class LiveMapView extends View {
     /** Modo oscuro para mapas claros: invierte, gira el tono 180° (el agua sigue azul, los parques verdes,
      *  el texto queda blanco) y aclara según el nivel de brillo (0 bajo, 1 medio, 2 alto). */
     static Bitmap darken(Bitmap src, int level) {
-        Bitmap out = Bitmap.createBitmap(src.getWidth(), src.getHeight(), Bitmap.Config.ARGB_8888);
+        Bitmap out = Bitmap.createBitmap(src.getWidth(), src.getHeight(), Bitmap.Config.RGB_565);
         android.graphics.ColorMatrix m = new android.graphics.ColorMatrix(new float[]{
                 -1, 0, 0, 0, 255, 0, -1, 0, 0, 255, 0, 0, -1, 0, 255, 0, 0, 0, 1, 0});
         m.postConcat(new android.graphics.ColorMatrix(new float[]{
@@ -170,9 +191,20 @@ public class LiveMapView extends View {
         lat = la;
         lon = lo;
         if (!Float.isNaN(br)) bearing = br;
-        if (!userZoom) zoom = speedKmh > 70 ? 15 : speedKmh > 35 ? 16 : 17;
+        int nextZoom = userZoom ? zoom : (speedKmh > 70 ? 15 : speedKmh > 35 ? 16 : 17);
+        boolean zoomChanged = nextZoom != zoom;
+        zoom = nextZoom;
+        boolean moved = Double.isNaN(drawnLat) || Math.abs(lat - drawnLat) > MIN_MOVE_DEG
+                || Math.abs(lon - drawnLon) > MIN_MOVE_DEG;
+        boolean turned = Float.isNaN(drawnBearing) != Float.isNaN(bearing)
+                || (!Float.isNaN(bearing) && !Float.isNaN(drawnBearing) && Math.abs(bearing - drawnBearing) > 2f);
         trimDisk();
-        invalidate();
+        if (moved || turned || zoomChanged) {
+            drawnLat = lat;
+            drawnLon = lon;
+            drawnBearing = bearing;
+            scheduleRedraw();
+        }
     }
 
     private boolean userZoom;
@@ -181,7 +213,7 @@ public class LiveMapView extends View {
     public void cycleZoom() {
         userZoom = true;
         zoom = zoom >= 17 ? 14 : zoom + 1;
-        invalidate();
+        scheduleRedraw();
     }
 
     @Override
@@ -267,6 +299,19 @@ public class LiveMapView extends View {
         return null;
     }
 
+    /** RGB_565 duplica el número de teselas que caben en la caché de una GPU Mali-400. */
+    private static Bitmap decode(File f) {
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inPreferredConfig = Bitmap.Config.RGB_565;
+        return BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+    }
+
+    private static Bitmap decode(byte[] data) {
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inPreferredConfig = Bitmap.Config.RGB_565;
+        return BitmapFactory.decodeByteArray(data, 0, data.length, o);
+    }
+
     private final Runnable worker = new Runnable() {
         public void run() {
             while (true) {
@@ -280,7 +325,7 @@ public class LiveMapView extends View {
                     File f = new File(dir, k + (Main.LIGHT && Integer.parseInt(k.split("_")[0]) == 5 ? "L" : "") + ".png");
                     String[] p = k.split("_");
                     int pv = Integer.parseInt(p[0]), layer = Integer.parseInt(p[1]);
-                    if (f.exists()) b = BitmapFactory.decodeFile(f.getAbsolutePath());
+                    if (f.exists()) b = decode(f);
                     if (b == null) {
                         int z = Integer.parseInt(p[2]), x = Integer.parseInt(p[3]), y = Integer.parseInt(p[4]);
                         String tpl = layer == 1 ? LABELS[pv] : URLS[pv];
@@ -301,7 +346,7 @@ public class LiveMapView extends View {
                         }
                         okCount++;
                         if (layer == 0) ERR[pv] = "OK";
-                        b = BitmapFactory.decodeByteArray(data, 0, data.length);
+                        b = decode(data);
                         if (b != null) {
                             FileOutputStream os = new FileOutputStream(f);
                             os.write(data);
@@ -320,7 +365,7 @@ public class LiveMapView extends View {
                         synchronized (queue) { pending.remove(fk); }
                         if (fb == null) { retryLater(fk); return; }
                         mem.put(fk, fb);
-                        invalidate();
+                        scheduleRedraw();
                     }
                 });
             }
@@ -330,7 +375,7 @@ public class LiveMapView extends View {
     private void retryLater(final String k) {
         synchronized (queue) { failed.add(k); }
         ui.postDelayed(new Runnable() {
-            public void run() { synchronized (queue) { failed.remove(k); } invalidate(); }
+            public void run() { synchronized (queue) { failed.remove(k); } scheduleRedraw(); }
         }, rounds >= 2 ? 60000 : 15000);
         trimDisk();
     }
