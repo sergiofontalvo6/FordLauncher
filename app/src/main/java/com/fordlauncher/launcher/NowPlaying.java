@@ -177,10 +177,10 @@ public class NowPlaying {
                 if (img == null) img = x.get("artwork");
                 if (img instanceof Bitmap) { t.art = (Bitmap) img; t.artSet = true; }
                 else if (img instanceof String) {
-                    try { t.art = android.graphics.BitmapFactory.decodeFile((String) img); t.artSet = t.art != null; } catch (Throwable ignored) { }
+                    try { t.art = BitmapUtil.decodeFile((String) img, 512, 512, false); t.artSet = t.art != null; } catch (Throwable ignored) { }
                 } else if (img instanceof byte[]) {
                     byte[] b = (byte[]) img;
-                    try { t.art = android.graphics.BitmapFactory.decodeByteArray(b, 0, b.length); t.artSet = t.art != null; } catch (Throwable ignored) { }
+                    try { t.art = BitmapUtil.decodeByteArray(b, 512, 512, false); t.artSet = t.art != null; } catch (Throwable ignored) { }
                 }
                 if (!t.artSet) return true;
             }
@@ -319,7 +319,7 @@ public class NowPlaying {
         public void artwork(Bitmap b) {
             try {
                 Track t = fromMeta(lastMeta);
-                t.art = b == null ? null : b.copy(Bitmap.Config.ARGB_8888, false);
+                t.art = BitmapUtil.downscaleCopy(b, 384);
                 t.artSet = true;
                 emit(t);
             } catch (Throwable ignored) { }
@@ -328,7 +328,7 @@ public class NowPlaying {
             try {
                 lastMeta = m;
                 Track t = fromMeta(m);
-                t.art = b == null ? null : b.copy(Bitmap.Config.ARGB_8888, false);
+                t.art = BitmapUtil.downscaleCopy(b, 384);
                 t.artSet = true;
                 emit(t);
             } catch (Throwable ignored) { }

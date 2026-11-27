@@ -53,7 +53,12 @@ public class LiveMapView extends View {
     private final boolean hi;                   // teselas @2x en pantallas densas
     private final File dir;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(48);
+    /** Antes eran 48 entradas sin control de bytes: podían ser varios MiB de teselas. */
+    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(2 * 1024 * 1024) {
+        @Override protected int sizeOf(String key, Bitmap value) {
+            return value == null ? 0 : value.getByteCount();
+        }
+    };
     private final HashSet<String> pending = new HashSet<String>();
     private final HashSet<String> failed = new HashSet<String>();
     private final LinkedList<String> queue = new LinkedList<String>();
@@ -94,6 +99,7 @@ public class LiveMapView extends View {
     }
 
     public boolean hasFix() { return !Double.isNaN(lat); }
+
     private final int bright;
 
     /** Mapa claro → estilo oscuro (invierte y gira el tono 180°, como el "modo noche" de muchos mapas). */
@@ -312,8 +318,9 @@ public class LiveMapView extends View {
                 ui.post(new Runnable() {
                     public void run() {
                         synchronized (queue) { pending.remove(fk); }
-                        if (fb != null) { mem.put(fk, fb); invalidate(); }
-                        else retryLater(fk);
+                        if (fb == null) { retryLater(fk); return; }
+                        mem.put(fk, fb);
+                        invalidate();
                     }
                 });
             }

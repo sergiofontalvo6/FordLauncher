@@ -212,7 +212,9 @@ public class CarPhoto {
     public static Bitmap load(Context ctx) {
         File f = new File(ctx.getFilesDir(), FILE);
         if (!f.exists()) return null;
-        try { return BitmapFactory.decodeFile(f.getAbsolutePath()); } catch (Throwable e) { return null; }
+        // La foto puede tener fondo transparente: conservamos ARGB_8888 pero
+        // jamás decodificamos más del lado máximo que luego se dibuja.
+        return BitmapUtil.decodeFile(f.getAbsolutePath(), MAX, MAX, true);
     }
 
     public static void delete(Context ctx) {

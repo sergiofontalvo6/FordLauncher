@@ -14,7 +14,6 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -103,7 +102,14 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     /** Motor único del asistente, compartido con el botón flotante global. */
     private com.fordlauncher.launcher.ai.AssistantActionEngine assistant;
     private final List<ResolveInfo> apps = new ArrayList<ResolveInfo>();
-    private final HashMap<String, Bitmap> iconCache = new HashMap<String, Bitmap>();
+    /** Iconos de assets, acotados por bytes (antes era un HashMap sin límite). */
+    private final android.util.LruCache<String, Bitmap> iconCache =
+            new android.util.LruCache<String, Bitmap>(2 * 1024 * 1024) {
+                @Override protected int sizeOf(String key, Bitmap value) {
+                    return value == null ? 0 : value.getByteCount();
+                }
+            };
+    private static final int ICON_PX_DEFAULT = 96;
 
     private FrameLayout root;
     private FrameLayout board;
@@ -1705,11 +1711,14 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         boolean isNight = prefs.getBoolean("headlight_night_active", false);
         String pathKey = isNight ? "wallpaper_night_path" : "wallpaper_day_path";
         String path = prefs.getString(pathKey, "");
+        // El fondo se dibuja dentro del layout de 1024x600: no hace falta
+        // decodificar la foto original a resolución completa ni con alfa.
+        final int TW = 1024, TH = 600;
         Bitmap photo = null;
         if (!path.isEmpty()) {
             try {
                 File f = new File(path);
-                if (f.exists()) photo = BitmapFactory.decodeFile(f.getAbsolutePath());
+                if (f.exists()) photo = BitmapUtil.decodeFile(f.getAbsolutePath(), TW, TH, false);
             } catch (Throwable ignored) {}
         }
         if (photo == null) {
@@ -1718,7 +1727,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
             if (!altPath.isEmpty()) {
                 try {
                     File f = new File(altPath);
-                    if (f.exists()) photo = BitmapFactory.decodeFile(f.getAbsolutePath());
+                    if (f.exists()) photo = BitmapUtil.decodeFile(f.getAbsolutePath(), TW, TH, false);
                 } catch (Throwable ignored) {}
             }
         }
@@ -1893,7 +1902,7 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         sourceTv = tv("", 11, RED, true);
         sourceTv.setGravity(Gravity.RIGHT);
         place(card, sourceTv, 80, 14, 150, 16);
-        playerArt = new PlayerArt(this, s, asset("ic/music_note.png"));
+        playerArt = new PlayerArt(this, s, asset("ic/music_note.png", Math.max(64, Math.round(180 * s))));
         place(card, playerArt, 34, 34, 180, 180);
         trackTv = tv("Nada sonando", 17, TEXT, true);
         trackTv.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -2783,7 +2792,8 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
 
     private ImageView icon(String name, float size) {
         ImageView v = new ImageView(this);
-        v.setImageBitmap(asset("ic/" + name + ".png"));
+        int px = Math.max(16, Math.min(512, Math.round(size * (s > 0 ? s : 1f))));
+        v.setImageBitmap(asset("ic/" + name + ".png", px));
         v.setScaleType(ImageView.ScaleType.FIT_CENTER);
         if (ICON != 0xFFFFFFFF) v.setColorFilter(ICON);
         return v;
@@ -2804,13 +2814,19 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
     }
 
     private Bitmap asset(String path) {
-        Bitmap b = iconCache.get(path);
+        return asset(path, ICON_PX_DEFAULT);
+    }
+
+    private Bitmap asset(String path, int targetPx) {
+        int px = Math.max(16, Math.min(512, targetPx));
+        String key = path + "@" + px;
+        Bitmap b = iconCache.get(key);
         if (b != null) return b;
         try {
             InputStream in = getAssets().open(path);
-            b = BitmapFactory.decodeStream(in);
-            in.close();
-            iconCache.put(path, b);
+            b = BitmapUtil.decodeStream(in, px, px, true);
+            if (b == null) throw new Exception("imagen vacía");
+            iconCache.put(key, b);
         } catch (Exception e) {
             b = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
         }
@@ -2962,7 +2978,8 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (playIc == null) return;
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         boolean on = playingState != null ? playingState : am.isMusicActive();
-        playIc.setImageBitmap(asset(on ? "ic/pause.png" : "ic/play_arrow.png"));
+        playIc.setImageBitmap(asset(on ? "ic/pause.png" : "ic/play_arrow.png",
+                Math.max(16, Math.round(28 * s))));
     }
 
     // ───────────────────────── pista en reproducción ─────────────────────────
@@ -3149,7 +3166,8 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (playIc != null) {
             boolean on = playingState != null ? playingState
                     : ((AudioManager) getSystemService(AUDIO_SERVICE)).isMusicActive();
-            playIc.setImageBitmap(asset(on ? "ic/pause.png" : "ic/play_arrow.png"));
+            playIc.setImageBitmap(asset(on ? "ic/pause.png" : "ic/play_arrow.png",
+                Math.max(16, Math.round(28 * s))));
         }
     }
 
@@ -3794,7 +3812,8 @@ public class Main extends Activity implements com.fordlauncher.launcher.ai.Assis
         if (weatherBox == null) return;
         if (!prefs.getBoolean("weather_on", true) || weatherNow == null) { weatherBox.setVisibility(View.GONE); return; }
         weatherBox.setVisibility(View.VISIBLE);
-        weatherIc.setImageBitmap(asset("ic/" + Weather.icon(weatherNow.code, weatherNow.day) + ".png"));
+        weatherIc.setImageBitmap(asset("ic/" + Weather.icon(weatherNow.code, weatherNow.day) + ".png",
+                Math.max(16, Math.round(20 * s))));
         weatherTv.setText(Math.round(weatherNow.temp) + "°" + weatherNow.unit);
         weatherCityTv.setText(weatherNow.city != null ? weatherNow.city : Weather.describe(weatherNow.code));
     }
